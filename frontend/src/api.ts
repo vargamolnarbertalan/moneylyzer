@@ -347,6 +347,7 @@ interface RequestOptions {
 }
 
 function detailMessage(status: number, payload: unknown): string {
+  if (status === 413) return "That is too much to send at once.";
   if (payload && typeof payload === "object" && "detail" in payload) {
     const detail = (payload as { detail: unknown }).detail;
     if (typeof detail === "string") return detail;
@@ -359,7 +360,6 @@ function detailMessage(status: number, payload: unknown): string {
     }
   }
   if (status === 403) return "The server refused the request.";
-  if (status === 413) return "That is too much to send at once.";
   if (status >= 500) return `Server error (${status}).`;
   return `Request failed (${status}).`;
 }

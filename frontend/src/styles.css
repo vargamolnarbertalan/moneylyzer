@@ -215,8 +215,8 @@ code {
   overflow: hidden;
   white-space: nowrap;
 }
-/* If the name ever does not fit (user text spacing, WCAG 1.4.12), it ends in an ellipsis rather than
-   a hard cut; screen readers still get the whole name. */
+/* If the name does not fit (mid-animation, or with larger user text spacing) it ends in an ellipsis
+   rather than a hard cut, so the cut is visible; screen readers still get the whole name. */
 .side-head .brand span {
   min-width: 0;
   overflow: hidden;

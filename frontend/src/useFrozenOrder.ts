@@ -1,15 +1,17 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type FocusEvent } from "react";
 
-/** Holds a list's order still while keyboard focus is inside it. A live update that re-sorts the
- *  rows would otherwise move the focused node in the DOM, and the browser drops focus to <body>.
- *  Values keep updating; the new order applies as soon as focus leaves the list.
- *  - Only keyboard focus (:focus-visible) freezes: a click or a Ctrl+click that opens a new tab
- *    leaves the list sorting live, so the header's sort stays true for everyone else.
+/** Holds a list's order still while keyboard or screen-reader focus is inside it. A live update that
+ *  re-sorts the rows would otherwise move the focused node in the DOM, and the browser drops focus to
+ *  <body>. Values keep updating; the new order applies as soon as focus leaves the list.
+ *  - Focus that follows a mouse or touch press does not freeze (a click, or a Ctrl+click that opens a
+ *    new tab, leaves the list sorting live).
  *  - Switching window or tab does not release it: focus is still on the row when the user returns.
- *  - Rows added while frozen go last until the order is released. */
+ *  - Rows added while frozen go last until the order is released.
+ *  - `paused` is true while frozen, so the sorted column can stop claiming an order the rows lost. */
 export function useFrozenOrder<T>(items: readonly T[], key: (item: T) => string | number) {
   const [frozen, setFrozen] = useState<(string | number)[] | null>(null);
   const box = useRef<HTMLElement | null>(null);
+  const pressedAt = useRef(0);
   const ordered = useMemo(() => {
     if (!frozen) return items;
     const byKey = new Map(items.map((it) => [key(it), it]));
@@ -23,10 +25,14 @@ export function useFrozenOrder<T>(items: readonly T[], key: (item: T) => string 
     shown.current = ordered;
   }, [ordered]);
 
+  const onPointerDown = useCallback(() => {
+    pressedAt.current = Date.now();
+  }, []);
   const onFocus = useCallback(
     (e: FocusEvent<HTMLElement>) => {
       box.current = e.currentTarget;
-      if ((e.target as Element).matches(":focus-visible")) setFrozen((f) => f ?? shown.current.map(key));
+      if (Date.now() - pressedAt.current < 1000) return; // focus from a press, not from the keyboard
+      setFrozen((f) => f ?? shown.current.map(key));
     },
     [key],
   );
@@ -43,5 +49,5 @@ export function useFrozenOrder<T>(items: readonly T[], key: (item: T) => string 
   useLayoutEffect(() => {
     if (frozen && box.current && document.hasFocus() && !box.current.contains(document.activeElement)) setFrozen(null);
   });
-  return { ordered, onFocus, onBlur };
+  return { ordered, paused: frozen !== null, onFocus, onBlur, onPointerDown };
 }

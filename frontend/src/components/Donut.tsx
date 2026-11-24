@@ -137,7 +137,7 @@ export function Donut({
           {compactMoney(total, base)}
         </text>
       </svg>
-      <ul className="legend" aria-label="Largest holdings" onFocus={legendOrder.onFocus} onBlur={legendOrder.onBlur}>
+      <ul className="legend" aria-label="Largest holdings" onFocus={legendOrder.onFocus} onBlur={legendOrder.onBlur} onPointerDown={legendOrder.onPointerDown}>
         {legendOrder.ordered.map((r) => (
           <li key={r.id}>
             <Link

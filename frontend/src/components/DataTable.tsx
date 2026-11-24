@@ -131,7 +131,7 @@ export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", cl
   const colCount = columns.length;
   // Re-sorting live rows must not drop focus from a row link (useFrozenOrder); the header sort
   // buttons are outside the body, so a sort the user asks for always applies.
-  const { ordered, onFocus, onBlur } = useFrozenOrder(sf.view, rowKey);
+  const { ordered, paused, onFocus, onBlur, onPointerDown } = useFrozenOrder(sf.view, rowKey);
   // A filter box and a count are clutter on a handful of rows (one purchase, three scenarios).
   // A filter still in force (a saved one) always shows the bar, so it can be cleared.
   const showBar = sf.isFiltered || (!noFilter && sf.total > SMALL_LIST);
@@ -146,7 +146,7 @@ export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", cl
                 const sortable = !!c.sortKey;
                 const cls = [c.className, c.align === "right" ? "r" : ""].filter(Boolean).join(" ");
                 return (
-                  <th key={c.key} role="columnheader" scope="col" className={cls || undefined} aria-sort={sortable ? sf.ariaSort(c.sortKey as string) : undefined}>
+                  <th key={c.key} role="columnheader" scope="col" className={cls || undefined} aria-sort={sortable && !paused ? sf.ariaSort(c.sortKey as string) : undefined}>
                     {sortable ? (
                       <button type="button" className="th-btn" onClick={() => sf.toggleSort(c.sortKey as string)}>
                         <span className={c.hideHeader ? "sr-only" : undefined}>{c.header}</span>
@@ -162,7 +162,7 @@ export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", cl
               })}
             </tr>
           </thead>
-          <tbody role="rowgroup" onFocus={onFocus} onBlur={onBlur}>
+          <tbody role="rowgroup" onFocus={onFocus} onBlur={onBlur} onPointerDown={onPointerDown}>
             {ordered.map((row) => {
               const href = rowHref?.(row);
               const extra = expanded?.(row);

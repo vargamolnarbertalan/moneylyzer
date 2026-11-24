@@ -273,7 +273,22 @@ class ApiTests(unittest.TestCase):
         # an AI question with a long conversation behind it is not cut off at 1 MiB (422: history is no list)
         ask = '{"question": "hi", "history": "' + "x" * (2 * 1024 * 1024) + '"}'
         self.assertEqual(self.client.post("/api/advisor/ask", content=ask, headers=raw).status_code, 422)
-        # normal requests are untouched
+        big_ask = '{"question": "hi", "history": "' + "x" * (5 * 1024 * 1024) + '"}'
+        r = self.client.post("/api/advisor/ask", content=big_ask, headers=raw)
+        self.assertEqual(r.status_code, 413)
+        self.assertIn("default-src 'self'", r.headers["content-security-policy"])  # a 413 keeps the headers
+        # an endpoint that reads no body never acts on a refused request
+        self.client.post("/api/instruments?create=1", headers=H,
+                         json={"instrument_id": "KEEP", "name": "Keep", "asset_type": "etf", "quantity": 1, "currency": "EUR"})
+        r = self.client.request("DELETE", "/api/instruments/KEEP?confirm_purchases=0", content=b"x" * (2 * 1024 * 1024), headers=raw)
+        self.assertEqual(r.status_code, 413)
+        self.assertTrue(any(i["instrument_id"] == "KEEP" for i in self.client.get("/api/instruments", headers=H).json()))
+        # signed out, the larger limits do not apply: no megabytes parsed before the login check
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post("/api/advisor/ask", content=ask, headers=raw).status_code, 413)
+        # normal requests are untouched (signed in again)
+        r = self.client.post("/api/auth/login", json={"username": "owner", "password": "correct horse 1"}, headers=H)
+        self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(self.client.patch("/api/prefs", json={"theme": "light"}, headers=H).status_code, 200)
 
     def test_edit_form_never_recreates_a_deleted_holding(self):
@@ -284,6 +299,8 @@ class ApiTests(unittest.TestCase):
         self.assertFalse(any(i["instrument_id"] == "GONE" for i in self.client.get("/api/instruments", headers=H).json()))
         self.assertEqual(self.client.post("/api/instruments?create=1", json=body, headers=H).status_code, 200)
         self.assertEqual(self.client.post("/api/instruments?update=1", json={**body, "name": "Kept"}, headers=H).status_code, 200)
+        names = {i["instrument_id"]: i["name"] for i in self.client.get("/api/instruments", headers=H).json()}
+        self.assertEqual(names["GONE"], "Kept")
 
     def test_security_headers(self):
         r = self.client.get("/api/health")

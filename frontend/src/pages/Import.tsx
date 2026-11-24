@@ -28,12 +28,12 @@ function ImportCard<R>({ step, title, blurb, endpoint, template, header, describ
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!file) return setError("Choose a CSV file first.");
-    // the server refuses bigger bodies with a bare 413 before it reads the file (server/main.py MAX_UPLOAD_BYTES)
-    if (file.size > MAX_CSV_BYTES) return setError("File is larger than 5 MB.");
-    setBusy(true);
     setError(null);
     setResult(null);
+    if (!file) return setError("Choose a CSV file first.");
+    // the server's own limit (server/main.py MAX_UPLOAD_BYTES), said before uploading megabytes for nothing
+    if (file.size > MAX_CSV_BYTES) return setError("File is larger than 5 MB.");
+    setBusy(true);
     try {
       const res = await api.upload<R>(endpoint, file);
       setResult(describe(res));

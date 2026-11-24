@@ -252,6 +252,7 @@ export function HoldingsPage() {
             form={form}
             setForm={setForm}
             onCancel={() => setEditing(null)}
+            onGone={list.reload}
             onSaved={() => {
               setEditing(null);
               list.reload();
@@ -348,9 +349,11 @@ interface HoldingFormProps {
   setForm: (f: FormState) => void;
   onCancel: () => void;
   onSaved: () => void;
+  /** The holding no longer exists (404). */
+  onGone: () => void;
 }
 
-function HoldingForm({ formRef, form, setForm, onCancel, onSaved }: HoldingFormProps) {
+function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: HoldingFormProps) {
   const uid = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -386,6 +389,8 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved }: HoldingFormP
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
+      // deleted on another device: the message stays here, the list drops the row
+      if (err instanceof ApiError && err.status === 404) onGone();
     } finally {
       setBusy(false);
     }

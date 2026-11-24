@@ -39,10 +39,16 @@ export function AdvisorRules() {
   const refocus = useRef(false);
   const failedDelete = useRef<string | null>(null);
   const listRef = useRef<HTMLOListElement | null>(null);
+  // Only take focus back if it was lost or is still in this card: the user may have moved on meanwhile.
+  const focusIsOurs = () => {
+    const a = document.activeElement;
+    return !a || a === document.body || a.closest("#rules") !== null;
+  };
   useEffect(() => {
     if (busy || failedDelete.current === null) return;
     const text = failedDelete.current;
     failedDelete.current = null;
+    if (!focusIsOurs()) return;
     const again = [...(listRef.current?.querySelectorAll<HTMLButtonElement>("button[data-rule]") ?? [])].find((b) => b.dataset.rule === text);
     // the input is disabled while the list is full (a conflict reload can leave it at 30): then the list
     (again ?? (input.current && !input.current.disabled ? input.current : listRef.current))?.focus();
@@ -50,7 +56,7 @@ export function AdvisorRules() {
   useEffect(() => {
     if (!refocus.current) return;
     refocus.current = false;
-    input.current?.focus();
+    if (focusIsOurs()) input.current?.focus();
   }, [rules]);
 
   if (rules === null) {

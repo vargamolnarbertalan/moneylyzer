@@ -36,10 +36,9 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(os.environ.get("LIA_STATIC_DIR") or ROOT / "frontend" / "dist")
 COOKIE_SECURE = os.environ.get("LIA_COOKIE_SECURE") == "1"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-# Request body limits (FastAPI max_body_size: Content-Length when sent, otherwise the streamed bytes are
-# counted; refused with 413 before the body is parsed or spooled to /tmp). Picked per route, never from a
-# client header. Most bodies are small JSON; an AI question carries up to 24 earlier messages, whose
-# answers can be long; CSV uploads are MAX_UPLOAD_BYTES plus multipart overhead.
+# Request body limits (BodyLimit below), picked by path, never from a client header. Most bodies are small
+# JSON; an AI question carries up to 24 earlier messages, whose answers can be long; CSV uploads are
+# MAX_UPLOAD_BYTES plus multipart overhead.
 MAX_JSON_BODY = 1024 * 1024
 MAX_ASK_BODY = 4 * 1024 * 1024
 MAX_MULTIPART_BODY = MAX_UPLOAD_BYTES + 1024 * 1024
@@ -59,8 +58,81 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 
-app = FastAPI(title="Moneylyzer", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None,
-              max_body_size=MAX_JSON_BODY)
+app = FastAPI(title="Moneylyzer", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def _body_limit(path: str, headers: dict) -> int:
+    """The larger limits also need a session cookie: those routes refuse anyone without one anyway, and an
+    anonymous client must not make the server parse megabytes before the login check runs."""
+    signed_in = f"{auth.COOKIE}=".encode() in headers.get(b"cookie", b"")
+    if signed_in and path.startswith("/api/import/"):
+        return MAX_MULTIPART_BODY
+    if signed_in and path == "/api/advisor/ask":
+        return MAX_ASK_BODY
+    return MAX_JSON_BODY
+
+
+class BodyLimit:
+    """Refuses oversized request bodies with 413: by Content-Length before the app runs at all (so an
+    endpoint that reads no body, such as a DELETE, never acts on a refused request), and by counting a
+    chunked body as it streams in. FastAPI's own max_body_size is not used because it only checks once
+    the endpoint reads the body or answers, after any side effect."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        limit = _body_limit(scope.get("path", ""), headers)
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                too_big = int(declared) > limit
+            except ValueError:
+                too_big = True
+            if too_big:
+                return await self._refuse(send)
+        seen = 0
+        started = refused = answered = False
+
+        async def counted():
+            # Past the limit the app is told the client left (an exception here would become FastAPI's
+            # own 400). The 413 goes out only if no response has begun: a stream cannot turn into one.
+            nonlocal seen, refused, answered
+            if refused:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    refused = True
+                    if not started:
+                        answered = True
+                        await self._refuse(send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message):
+            nonlocal started
+            if answered:  # after our 413 nothing the app answers may reach the client
+                return
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        await self.app(scope, counted, guarded_send)
+
+    @staticmethod
+    async def _refuse(send):
+        body = b'{"detail":"That is too much to send at once."}'
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+app.add_middleware(BodyLimit)  # added before security_headers, so its 413 gets those headers too
 
 
 @app.middleware("http")
@@ -470,7 +542,7 @@ async def _read_csv(file: UploadFile) -> pd.DataFrame:
         raise HTTPException(400, f"Could not read the CSV: {exc}") from None
 
 
-@app.post("/api/import/holdings", max_body_size=MAX_MULTIPART_BODY)
+@app.post("/api/import/holdings")
 async def import_holdings(file: UploadFile = File(...), user: str = Depends(auth.require_user)):
     frame = (await _read_csv(file)).replace("", None)
     try:
@@ -482,7 +554,7 @@ async def import_holdings(file: UploadFile = File(...), user: str = Depends(auth
     return {"imported": count}
 
 
-@app.post("/api/import/lots", max_body_size=MAX_MULTIPART_BODY)
+@app.post("/api/import/lots")
 async def import_lots(file: UploadFile = File(...), user: str = Depends(auth.require_user)):
     frame = await _read_csv(file)
     try:
@@ -494,7 +566,7 @@ async def import_lots(file: UploadFile = File(...), user: str = Depends(auth.req
     return {"added": added, "skipped_duplicates": skipped}
 
 
-@app.post("/api/import/prices", max_body_size=MAX_MULTIPART_BODY)
+@app.post("/api/import/prices")
 async def import_prices(file: UploadFile = File(...), user: str = Depends(auth.require_user)):
     frame = await _read_csv(file)
     missing = {"instrument_id", "date", "close"} - set(frame.columns)
@@ -686,7 +758,7 @@ def ai_settings_save(body: SettingsBody, user: str = Depends(auth.require_user))
         raise HTTPException(409, str(exc)) from None
 
 
-@app.post("/api/advisor/ask", max_body_size=MAX_ASK_BODY)
+@app.post("/api/advisor/ask")
 async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
     snapshot = hub.snapshot or await hub.refresh()
     if body.instrument_id and not any(r["id"] == body.instrument_id for r in snapshot.get("rows", [])):
