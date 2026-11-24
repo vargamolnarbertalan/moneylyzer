@@ -2410,6 +2410,10 @@ input[type="radio"],
 .chip:disabled {
   opacity: 0.55;
 }
+.chip.chip-more {
+  background: transparent;
+  border-style: dashed;
+}
 .advisor-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);

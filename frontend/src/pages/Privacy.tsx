@@ -74,7 +74,7 @@ const FLOWS: readonly Flow[] = [
   },
   {
     name: "AI model (only when you ask)",
-    sends: "your question, your AI analyst rules and persona, and portfolio weights and % changes; amounts, quantities and purchase dates only to a model set to full detail below.",
+    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio weights and % changes; amounts, quantities, purchase dates and platforms only to a model set to full detail below.",
     gets: "the answer and the sources it used.",
     linkable: "account",
     linkNote: "Yes: the provider knows the account you connected (Claude login or API key) and can link every question to it. A local model stays on your network.",
@@ -152,7 +152,7 @@ function AiSharing() {
     <Card as="section" id="ai" aria-labelledby="ai-share-h">
       <CardHeader id="ai-share-h" title="What the AI analyst may see" />
       <p className="sub">
-        Set per connected model. Relative figures are weights and percentage changes only. Full detail adds amounts, quantities, costs and purchase dates.
+        Set per connected model. Relative figures are weights and percentage changes only. Full detail adds amounts, quantities, costs, purchase dates and the platforms you bought on.
         A local model keeps everything on your network.
       </p>
       {providers.loading && !providers.data ? (
@@ -211,7 +211,7 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
       </div>
       {full ? (
         <div className="btn-row">
-          <span className="sub">This model receives your amounts, quantities and purchase dates.</span>
+          <span className="sub">This model receives your amounts, quantities, purchase dates and platforms.</span>
           <button type="button" className="btn ghost small" disabled={busy} onClick={() => void apply("relative")}>
             {busy && <span className="spinner" aria-hidden="true" />}
             {busy ? "Switching…" : "Switch to relative figures"}
@@ -222,7 +222,7 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
           <Alert tone="warn">
             {p.local
               ? "Full detail stays on your network with a local model."
-              : `Full detail sends your amounts, quantities, costs and purchase dates to ${p.name}'s provider, linked to your account there.`}
+              : `Full detail sends your amounts, quantities, costs, purchase dates and platforms to ${p.name}'s provider, linked to your account there.`}
           </Alert>
           <label className="check" htmlFor={`${uid}ok`}>
             <input id={`${uid}ok`} type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />

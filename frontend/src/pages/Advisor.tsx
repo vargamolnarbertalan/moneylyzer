@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
-import { MAX_QUESTION, QUICK_PROMPTS, clearChat, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
+import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
 import { endpoints, errorMessage, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
@@ -28,6 +28,9 @@ export function AdvisorPage() {
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
   const mounted = useRef(false);
   const busy = useRef(false);
+  const [allPrompts, setAllPrompts] = useState(false);
+  const prompts = allPrompts ? QUICK_PROMPTS : QUICK_PROMPTS.slice(0, QUICK_PROMPTS_SHOWN);
+  const hiddenPrompts = QUICK_PROMPTS.length - QUICK_PROMPTS_SHOWN;
 
   const list: Provider[] = providers.data ?? [];
   const selected = list.find((p) => p.id === chat.providerId) ?? list.find((p) => p.is_default) ?? list[0] ?? null;
@@ -173,16 +176,21 @@ export function AdvisorPage() {
         {providers.error && !providers.data && <Alert tone="err">Could not load the models: {providers.error}</Alert>}
 
         <div className="chips" role="group" aria-label="Quick questions">
-          {QUICK_PROMPTS.map((q) => (
+          {prompts.map((q) => (
             <button key={q.label} type="button" className="chip" onClick={() => send(q.question)} disabled={waiting}>
               {q.label}
             </button>
           ))}
+          {hiddenPrompts > 0 && (
+            <button key="more" type="button" className="chip chip-more" aria-expanded={allPrompts} onClick={() => setAllPrompts((v) => !v)}>
+              {allPrompts ? "Fewer questions" : `More questions (${hiddenPrompts})`}
+            </button>
+          )}
         </div>
 
         {selected?.data_level === "full" && !selected.local && (
           <Alert tone="warn" className="share-warn">
-            <b>Full detail is on for {selected.name}.</b> Each question sends your amounts, quantities, costs and purchase dates to its provider, linked to
+            <b>Full detail is on for {selected.name}.</b> Each question sends your amounts, quantities, costs, purchase dates and platforms to its provider, linked to
             your account there.{" "}
             <Link className="btn ghost small" to="/privacy#ai">
               Change
@@ -290,7 +298,7 @@ function Answer({ m }: { m: ChatMessage }) {
         <details className="shared">
           <summary>What was shared</summary>
           <ul className="plain-list">
-            <li>{shared.data_level === "full" ? "Full detail (amounts, quantities, purchase dates)" : "Relative figures only (weights and % changes)"}</li>
+            <li>{shared.data_level === "full" ? "Full detail (amounts, quantities, purchase dates, platforms)" : "Relative figures only (weights and % changes)"}</li>
             <li>
               {shared.holdings} {shared.holdings === 1 ? "holding" : "holdings"} · {shared.benchmarks} market {shared.benchmarks === 1 ? "benchmark" : "benchmarks"} · {shared.news_items} news {shared.news_items === 1 ? "item" : "items"}
             </li>

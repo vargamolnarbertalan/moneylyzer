@@ -253,6 +253,8 @@ export interface Preferences {
   risk: Risk;
   allow_short_term: boolean;
   language: "auto" | "en" | "hu";
+  /** Country of residence as the user wrote it; empty = the analyst infers it and asks. */
+  country: string;
   notes: string;
 }
 

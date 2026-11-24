@@ -205,7 +205,8 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
         if level == "full":
             lots = db.get_lots(r["id"])
             item["purchases"] = [{"date": l["buy_date"], "quantity": l["quantity"], "unit_price": l["unit_price"],
-                                  "paid_amount": l["paid_amount"], "paid_currency": l["paid_currency"]}
+                                  "paid_amount": l["paid_amount"], "paid_currency": l["paid_currency"],
+                                  "platform": l.get("platform") or None}
                                  for l in lots.to_dict("records")]
         holdings.append(item)
     totals = snapshot.get("totals", {})
