@@ -148,6 +148,10 @@ def _claude_code(p: Provider, system: str, messages: list[dict]) -> dict:
     for m in messages[:-1]:
         transcript.append(f"<{m['role']}_turn>\n{m['content']}\n</{m['role']}_turn>")
     prompt = (("Earlier in this conversation:\n" + "\n".join(transcript) + "\n\n") if transcript else "") + messages[-1]["content"]
+    # The prompt carries text nobody here wrote (news headlines, names, notes, platforms). An "@path" in it
+    # must never become a Claude Code file mention, so "@" goes as the look-alike FULLWIDTH COMMERCIAL AT
+    # (as analyzer/ai.py escapes it in its JSON).
+    prompt = prompt.replace("@", "＠")
     tools = "WebSearch,WebFetch" if p.web_research else ""
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     # The system prompt (persona + rules, up to ~27k characters) goes through a private temp file, not
