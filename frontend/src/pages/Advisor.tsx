@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
-import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
+import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
 import { FULL_DETAIL_ITEMS, endpoints, errorMessage, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
@@ -64,6 +64,8 @@ export function AdvisorPage() {
       setFailure(null);
       try {
         const body: Parameters<typeof endpoints.ask>[0] = { question, history: historyBefore(before, before.length) };
+        const level = conversationLevel(before);
+        if (level) body.expected_level = level;
         const pid = chatRef.current.providerId;
         if (pid) body.provider_id = pid;
         if (holding) body.instrument_id = holding;
@@ -143,7 +145,14 @@ export function AdvisorPage() {
               id={modelId}
               value={selected?.id ?? ""}
               disabled={waiting || list.length === 0}
-              onValueChange={(v) => setChat((c) => ({ ...c, providerId: v }))}
+              onValueChange={(v) => {
+                // another model starts a new conversation: earlier answers stay with the model (and the
+                // sharing level) they were written for
+                if (v === chatRef.current.providerId) return;
+                clearChat();
+                setChat({ providerId: v, messages: [] });
+                setFailure(null);
+              }}
               options={
                 list.length === 0
                   ? [{ value: "", label: providers.loading ? "Loading…" : "No model" }]
@@ -314,6 +323,7 @@ function Answer({ m }: { m: ChatMessage }) {
             <li>
               {shared.holdings} {shared.holdings === 1 ? "holding" : "holdings"} · {shared.benchmarks} market {shared.benchmarks === 1 ? "benchmark" : "benchmarks"} · {shared.news_items} news {shared.news_items === 1 ? "item" : "items"}
             </li>
+            {(shared.notes ?? 0) > 0 && <li>{shared.notes === 1 ? "1 holding note" : `${shared.notes} holding notes`}</li>}
             <li>Web research: {shared.web_research ? "on" : "off"}</li>
           </ul>
         </details>

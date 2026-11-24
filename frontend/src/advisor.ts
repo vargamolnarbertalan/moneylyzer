@@ -7,8 +7,8 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  /** Only on answers. `withheld`: earlier full-detail answers not sent with this question. */
-  meta?: Pick<AdvisorAnswer, "provider" | "model" | "sources" | "shared"> & { withheld?: number };
+  /** Only on answers. */
+  meta?: Pick<AdvisorAnswer, "provider" | "model" | "sources" | "shared">;
 }
 
 export interface Chat {
@@ -118,21 +118,23 @@ export function takeQueuedQuestion(): { question: string; holding: string | null
   return { question: p.question, holding: typeof p.holding === "string" ? p.holding : null };
 }
 
-/** The last turns before a question, as the API wants them: plain question and answer text, at most 24
- *  entries. A model on relative figures never gets an earlier answer written from full detail (it can
- *  quote amounts) nor the question that led to it; `withheld` counts those answers. */
-export function historyBefore(messages: readonly ChatMessage[], index: number, level: DataLevel = "full"): { turns: ChatTurn[]; withheld: number } {
-  const kept: ChatMessage[] = [];
-  let withheld = 0;
-  for (const m of messages.slice(0, index)) {
-    if (level === "relative" && m.role === "assistant" && m.meta?.shared?.data_level === "full") {
-      withheld += 1;
-      if (kept[kept.length - 1]?.role === "user") kept.pop();
-      continue;
-    }
-    kept.push(m);
+/** The last turns before a question, as the API wants them: plain question and answer text, at most 24 entries. */
+export function historyBefore(messages: readonly ChatMessage[], index: number): ChatTurn[] {
+  return messages
+    .slice(0, index)
+    .map((m) => ({ role: m.role, content: m.content }) satisfies ChatTurn)
+    .slice(-MAX_HISTORY);
+}
+
+/** The sharing level this conversation's answers were written at (none yet: undefined). A conversation stays
+ *  at one level: the server refuses to continue it on a model whose level differs, so answers written
+ *  from full detail never reach a model on relative figures. */
+export function conversationLevel(messages: readonly ChatMessage[]): DataLevel | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const level = messages[i]?.meta?.shared?.data_level;
+    if (level) return level;
   }
-  return { turns: kept.map((m) => ({ role: m.role, content: m.content }) satisfies ChatTurn).slice(-MAX_HISTORY), withheld };
+  return undefined;
 }
 
 /** Only http(s) links are ever rendered as links. */

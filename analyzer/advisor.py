@@ -146,6 +146,11 @@ def get_settings() -> dict:
             "default_persona": DEFAULT_PERSONA, "preferences": prefs, "rules": rules}
 
 
+class LevelChanged(Exception):
+    """The conversation was written at another sharing level than the model now has: its earlier answers
+    (perhaps with amounts) must not reach a model that may only see relative figures."""
+
+
 class RulesConflict(ValueError):
     """The rules changed (another tab or device) since the client loaded them."""
 
@@ -211,8 +216,12 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
         item = {k: _r(r.get(k)) for k in keys}
         inst = instruments.get(str(r["id"]), {})
         item["price_divisor"] = _r(float(inst.get("price_divisor") or 1))
-        if level == "full" and isinstance(inst.get("notes"), str) and inst["notes"].strip():
-            item["notes"] = inst["notes"].strip()  # the owner's own words about the holding
+        if level == "full":
+            notes = _text_or_none(inst.get("notes"))
+            if notes:
+                item["notes"] = " ".join(notes.split())[:1000]  # the owner's own words; CSV imports have no cap
+            if r.get("check"):
+                item["check"] = r["check"]  # data problems (may quote units), full detail only
         hist = db.get_prices(r["id"])
         if not hist.empty:
             m = analyze_history({"asset_type": r["type"]}, hist)
@@ -265,13 +274,16 @@ def render_context(ctx: dict) -> str:
 
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
-        instrument_id: str | None = None, now: datetime | None = None) -> dict:
+        instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None) -> dict:
     question = (question or "").strip()
     if not question:
         raise ValueError("Ask a question first.")
     if len(question) > MAX_QUESTION_CHARS:
         raise ValueError(f"Keep the question under {MAX_QUESTION_CHARS} characters.")
     provider = get_provider(provider_id)
+    if expected_level and expected_level != provider.data_level:
+        raise LevelChanged("This model's sharing level changed since this conversation started. "
+                           "Start a new conversation to go on.")
     settings = get_settings()
     ctx = build_context(snapshot, provider.data_level, instrument_id)
     shared = {"data_level": provider.data_level, "holdings": len(ctx["portfolio"]["holdings"]),

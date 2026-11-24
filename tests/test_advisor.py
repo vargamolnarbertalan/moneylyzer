@@ -73,10 +73,22 @@ class PersonaTests(unittest.TestCase):
     def test_app_guide_matches_the_apps_routes(self):
         app = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
         app = app[app.index("function route("):app.index("function AuthedApp")]  # pages only, not /login or redirects
-        routes = set(re.findall(r'path === "([^"]+)"', app)) | set(re.findall(r'matchPath\("([^"]+)"', app))
-        self.assertEqual(routes, set(persona.APP_PAGES))  # a page added or renamed must reach the guide
+        self.assertNotIn("startsWith", app)  # every page is an exact path or a matchPath pattern the test can read
+        titles = dict(re.findall(r'path === "([^"]+)"\) return \{ title: "([^"]+)"', app))
+        for pattern, title in re.findall(r'matchPath\("([^"]+)".*?\n.*?title: "([^"]+)"', app):
+            titles[pattern] = title
+        self.assertEqual(titles, persona.APP_PAGES)  # a page added, removed or renamed must reach the guide
         for name in persona.APP_PAGES.values():
             self.assertIn(f"- {name}", persona.APP_GUIDE)
+        src = Path(__file__).resolve().parents[1] / "frontend" / "src"
+        sections = set()
+        for rel in ("pages/Settings.tsx", "components/ai/AiModels.tsx", "components/ai/AdvisorRules.tsx",
+                    "components/ai/PersonaSettings.tsx"):
+            sections |= set(re.findall(r'title="([^"]+)"', (src / rel).read_text(encoding="utf-8")))
+        sections -= {"Delete rule"}  # a button tooltip, not a section
+        settings_line = persona.APP_GUIDE[persona.APP_GUIDE.index("- Settings:"):]
+        for section in sections:
+            self.assertIn(section, settings_line, f"Settings section {section!r} missing from the app guide")
         text = persona.compose_system_prompt("Short persona.", {}, "relative", False)
         self.assertIn("you cannot change anything in the app", text)  # fixed: an edited persona keeps it
         self.assertLess(text.index("Non-negotiable guardrails"), text.index("# The app you work in"))
@@ -190,6 +202,7 @@ class AnthropicTests(TempDb):
             out = llm.complete(p, "SYS", [{"role": "user", "content": "q"}])
         self.assertEqual(ctor.call_args.kwargs["api_key"], "sk-ant-test")
         kwargs = client.beta.messages.create.call_args_list[0].kwargs
+        self.assertEqual(kwargs["system"], [{"type": "text", "text": "SYS", "cache_control": {"type": "ephemeral"}}])
         self.assertEqual(kwargs["fallbacks"], "default")
         self.assertEqual(kwargs["betas"], ["server-side-fallback-2026-07-01"])
         self.assertEqual(kwargs["tools"][0]["type"], "web_search_20260209")
@@ -364,6 +377,13 @@ class ContextPrivacyTests(TempDb):
             advisor.ask(None, "Again", [], self.snapshot(), now=datetime(2030, 1, 1, tzinfo=timezone.utc))
         self.assertEqual(captured["system"], first)
         self.assertIn("2030-01-01 00:00", captured["messages"][-1]["content"])
+
+    def test_a_conversation_stays_at_its_sharing_level(self):
+        with mock.patch("analyzer.advisor.complete", lambda p, s, m: {"text": "ok", "model": "m", "sources": []}):
+            with self.assertRaises(advisor.LevelChanged):  # the built-in model is on relative figures
+                advisor.ask(None, "And now?", [{"role": "user", "content": "q"}, {"role": "assistant", "content": "777 units"}],
+                            self.snapshot(), expected_level="full")
+            self.assertEqual(advisor.ask(None, "q", [], self.snapshot(), expected_level="relative")["text"], "ok")
 
     def test_notes_only_at_full_detail_price_units_always(self):
         db.upsert_instrument({"instrument_id": "DEMO", "name": "Demo ETF", "asset_type": "etf", "currency": "EUR",
