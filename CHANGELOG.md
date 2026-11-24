@@ -1,0 +1,50 @@
+# Changelog
+
+## 1.0.0
+- New UI: React + Vite + TypeScript ("Aurora" design), responsive down to phone width, live updates pushed over Server-Sent Events.
+- New server: FastAPI on one port serving the API, the live stream and the built UI; one Docker image (docker compose up -d --build); data on the `lia-data` volume.
+- Sign-in for LAN/phone access: first-run setup code from the container log, scrypt password hash, server-side sessions, login rate limit, CSRF header check, strict CSP.
+- Claude: connect your Claude subscription from Settings (Claude Code `auth login` inside the container); portfolio-level explanation sends names, types, weights and % changes only.
+- One live hub fetches quotes/FX every 60 s, daily histories once a day and fund prices hourly for all tabs, with back-off on failures.
+- Review fixes: buy-date FX from a complete daily history (no buy dates sent to Yahoo, today's bar never stored); purchases without price/HUF paid are unknown, never free; live quotes without a currency are refused; atomic purchase import with duplicate skip; deleting a holding with purchases needs explicit confirmation; purchase currency/divisor locked once purchases exist.
+- Streamlit UI retired.
+- Renamed to **Moneylyzer**; image and container are `moneylyzer` (the data volume keeps its `lia-data` name).
+- Display currency of your choice, with each past day converted at that day's rate; value history from 1 week to all time.
+- Purchases record the platform, app or bank; an add-holding wizard searches Yahoo tickers and Hungarian fund ISINs and previews the live quote.
+- AI analyst (replaces the one-off Claude explanation): your Claude subscription, an API key (Claude, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI) or a local model; standing rules, an editable persona and investing preferences; safety guardrails always on top.
+- Data & privacy page: every outgoing request with what it sends and reveals, and a per-model choice between relative figures (default) and full detail.
+- Markets page: benchmarks and news about your holdings.
+- Charts: click two points to compare them (amount, percent, dates on the chart; keyboard and screen-reader controls too).
+- Motion and loading: charts draw in, live numbers count to their new value, skeletons on slow loads, pages load on demand; Settings → Appearance → Animations turns it all down (as does the system's reduced-motion setting).
+- View preferences (theme, ranges, table sorting, sidebar) follow your account across devices.
+- "Not financial advice" notice accepted once before first use, shown again in Settings → About.
+- Docker build tolerates slow networks (longer pip timeout and retries).
+
+## 0.3.0
+- Live Overview: portfolio total and unrealized P/L in HUF, refreshed every 60 s from Yahoo quotes and intraday FX (EUR/HUF, USD/HUF, ...). Holdings without a live quote use their latest stored price.
+- Purchases (buy lots): date, quantity, unit price, optional HUF paid; form on Instruments and CSV import. Quantity and average cost come from purchases when present; HUF cost uses the HUF paid or the buy-date Yahoo FX close (cached in the new fx_rates table).
+- Hungarian investment funds priced automatically: market_symbol `fund:<ISIN>` downloads daily prices from OTP Alapkezelő, falling back to BAMOSZ (plain HTTP, only the ISIN is sent).
+- Migration hardened: write-locked re-check, atomic backup copy, tolerant of pre-existing orphan rows, safe under concurrent starts. Database backup download uses SQLite's backup API.
+- Clearer error when a holdings CSV has no header row.
+- Database connections are now always closed (Windows file locks).
+
+## 0.2.0
+- AI explanation now uses Claude via the local Claude Code CLI (your Claude plan, no API key) instead of Ollama. Online, on click only; sends computed metrics, never quantities or cost basis.
+- Fix: Yahoo daily prices for European/Asian tickers were stored one day early (UTC conversion).
+- Fix: blank instrument_id/name/currency in a holdings CSV were stored as the text "nan".
+- Fix: holdings are no longer valued with prices quoted in another currency or minor unit (e.g. GBp pence); the Overview flags them.
+- Fix: Analysis showed the currency as a green delta arrow next to the latest price.
+- Removed the direct requests dependency; replaced deprecated Streamlit use_container_width.
+- install_windows.bat / run_windows.bat use Windows (CRLF) line endings.
+- Yahoo refresh now saves nothing when Yahoo does not report the quote currency.
+- Behaviour change: a holding whose prices are quoted in another currency or minor unit (e.g. an LSE ticker in GBp) is no longer valued; the Check column says how to fix it.
+- If you stored Yahoo prices with 0.1.0, delete those instruments' price history (or the instruments) and refresh again: 0.1.0 saved European/Asian closes one day early.
+- Requires Streamlit 1.67 or newer.
+- New asset type `commodity` (e.g. gold), scored by the same price-trend rules. An existing 0.1.0 database is migrated once on start; a copy is kept as data/investment_analyzer.before-migration-<date-time>.sqlite3 (0.2.0 builds named it .before-commodity.sqlite3).
+
+## 0.1.0
+- Initial local Streamlit dashboard.
+- SQLite storage for instruments and daily prices.
+- CSV import/export and optional yfinance history refresh.
+- Price-only indicators, signal rules and historical bootstrap scenarios.
+- Optional local Ollama metric explanation.

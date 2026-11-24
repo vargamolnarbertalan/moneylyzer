@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# Personal data — never commit. The app stores everything under data/ (or the
+# Docker volume); exports, backups and imports are portfolio data too.
+# ---------------------------------------------------------------------------
+data/
+*.sqlite3
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.db
+*.partial
+*backup*.sqlite3
+*.csv
+!**/fixtures/*.csv
+portfolio_snapshot*
+investment_analyzer_backup*
+
+# Design mocks contain the maintainer's real holdings; the legacy UI is not shipped.
+mocks/
+legacy-streamlit/
+
+# Local tool caches (design-hook state: local paths and session ids)
+.impeccable/
+
+# Screenshots / browser automation output can show portfolio figures.
+.playwright-mcp/
+screenshots/
+*.png
+!docs/**/*.png
+# the app's own icon (rendered from public/logo.svg), not a screenshot
+!frontend/public/apple-touch-icon.png
+
+# ---------------------------------------------------------------------------
+# Secrets and local configuration
+# ---------------------------------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+.credentials.json
+.claude/
+.streamlit/secrets.toml
+docker-compose.override.yml
+
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# ---------------------------------------------------------------------------
+# Node / frontend
+# ---------------------------------------------------------------------------
+frontend/node_modules/
+frontend/dist/
+node_modules/
+npm-debug.log*
+*.tsbuildinfo
+
+# ---------------------------------------------------------------------------
+# Editors and OS
+# ---------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log

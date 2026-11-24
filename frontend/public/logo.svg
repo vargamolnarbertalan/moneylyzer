@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Moneylyzer">
+  <title>Moneylyzer</title>
+  <defs>
+    <linearGradient id="ml-grad" x1="6" y1="6" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B6CFF"/>
+      <stop offset="0.55" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#F472B6"/>
+    </linearGradient>
+    <linearGradient id="ml-glass" x1="10" y1="10" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#151829"/>
+      <stop offset="1" stop-color="#0B0D17"/>
+    </linearGradient>
+  </defs>
+  <!-- handle -->
+  <path d="M43 43 L57 57" stroke="url(#ml-grad)" stroke-width="7" stroke-linecap="round"/>
+  <!-- lens: glass, coin rim with milled edge -->
+  <circle cx="27" cy="27" r="21" fill="url(#ml-glass)"/>
+  <circle cx="27" cy="27" r="21" fill="none" stroke="url(#ml-grad)" stroke-width="5"/>
+  <circle cx="27" cy="27" r="15.5" fill="none" stroke="url(#ml-grad)" stroke-width="1.4" stroke-dasharray="2 2.6" opacity=".75"/>
+  <!-- rising sparkline -->
+  <path d="M15 33 L21.5 26.5 L26.5 30 L33 21.5 L39 23" fill="none" stroke="#EEF0FF" stroke-width="3.2"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="39" cy="23" r="2.6" fill="#22D3EE"/>
+</svg>

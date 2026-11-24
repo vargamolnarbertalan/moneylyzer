@@ -1,0 +1,25 @@
+services:
+  app:
+    build: .
+    image: moneylyzer:latest
+    container_name: moneylyzer
+    # Reachable from your phone on the home Wi-Fi (sign-in required).
+    # For this-PC-only access use: "127.0.0.1:8080:8080"
+    ports:
+      - "8080:8080"
+    volumes:
+      - lia-data:/data        # database, Claude login, caches
+    # environment:
+    #   LIA_DONATE_URL: ""      # hide the "Buy me a coffee" link
+    #   LIA_COOKIE_SECURE: "1"  # only behind an HTTPS reverse proxy
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  lia-data:

@@ -1,0 +1,16 @@
+# Build context = only what the image needs. Never send personal data or secrets.
+*
+!Dockerfile
+!requirements.lock
+!LICENSE
+!DISCLAIMER.md
+!analyzer/
+!server/
+!frontend/
+frontend/node_modules/
+frontend/dist/
+**/__pycache__/
+**/*.py[cod]
+**/*.sqlite3*
+**/*.csv
+**/.env*
