@@ -44,6 +44,7 @@ export function Purchases({ instrumentId, currency, base, lots, onChanged }: Pur
   const sf = useSortFilter<Lot>({
     id: `purchases`,
     rows: lots,
+    saveFilter: false, // one table per holding: the sort is shared, a filter stays on its own page
     fields: {
       date: { type: "text", value: (l) => l.buy_date },
       quantity: { type: "number", value: (l) => l.quantity },
