@@ -2411,8 +2411,19 @@ input[type="radio"],
   opacity: 0.55;
 }
 .chip.chip-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   background: transparent;
   border-style: dashed;
+  border-color: var(--muted);
+}
+.chip.chip-more svg {
+  width: 14px;
+  height: 14px;
+}
+.chip.chip-more svg.flip {
+  transform: rotate(180deg);
 }
 .advisor-layout {
   display: grid;

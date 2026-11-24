@@ -1,6 +1,6 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, ShieldAlert, ShieldCheck } from "lucide-react";
-import { endpoints, errorMessage, type DataLevel, type Provider } from "../api";
+import { FULL_DETAIL_ITEMS, endpoints, errorMessage, type DataLevel, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card, CardHeader } from "../components/Card";
 import { BlockSkeleton } from "../components/Skeleton";
@@ -74,11 +74,11 @@ const FLOWS: readonly Flow[] = [
   },
   {
     name: "AI model (only when you ask)",
-    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio weights and % changes; amounts, quantities, purchase dates and platforms only to a model set to full detail below.",
+    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio weights and % changes; with full detail also your " + FULL_DETAIL_ITEMS + ".",
     gets: "the answer and the sources it used.",
     linkable: "account",
     linkNote: "Yes: the provider knows the account you connected (Claude login or API key) and can link every question to it. A local model stays on your network.",
-    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts and purchase history (financial data).",
+    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase history and where you hold what (financial data).",
   },
   {
     name: "npm (once)",
@@ -152,7 +152,7 @@ function AiSharing() {
     <Card as="section" id="ai" aria-labelledby="ai-share-h">
       <CardHeader id="ai-share-h" title="What the AI analyst may see" />
       <p className="sub">
-        Set per connected model. Relative figures are weights and percentage changes only. Full detail adds amounts, quantities, costs, purchase dates and the platforms you bought on.
+        Set per connected model. Relative figures are weights and percentage changes only. Full detail adds your {FULL_DETAIL_ITEMS}.
         A local model keeps everything on your network.
       </p>
       {providers.loading && !providers.data ? (
@@ -171,9 +171,7 @@ function AiSharing() {
 }
 
 function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
-  const uid = useId();
   const [confirming, setConfirming] = useState(false);
-  const [understood, setUnderstood] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // The level the server just confirmed, shown until the reloaded list says the same: without it
@@ -188,7 +186,6 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
       await endpoints.setDataLevel(p.id, level, level === "full");
       setConfirmed(level);
       setConfirming(false);
-      setUnderstood(false);
       onChanged();
     } catch (err) {
       setError(errorMessage(err));
@@ -211,7 +208,7 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
       </div>
       {full ? (
         <div className="btn-row">
-          <span className="sub">This model receives your amounts, quantities, purchase dates and platforms.</span>
+          <span className="sub">This model receives your {FULL_DETAIL_ITEMS}.</span>
           <button type="button" className="btn ghost small" disabled={busy} onClick={() => void apply("relative")}>
             {busy && <span className="spinner" aria-hidden="true" />}
             {busy ? "Switching…" : "Switch to relative figures"}
@@ -220,16 +217,10 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
       ) : confirming ? (
         <div className="share-confirm">
           <Alert tone="warn">
-            {p.local
-              ? "Full detail stays on your network with a local model."
-              : `Full detail sends your amounts, quantities, costs, purchase dates and platforms to ${p.name}'s provider, linked to your account there.`}
+            Full detail sends your {FULL_DETAIL_ITEMS} to {p.name}'s provider, linked to your account there.
           </Alert>
-          <label className="check" htmlFor={`${uid}ok`}>
-            <input id={`${uid}ok`} type="checkbox" checked={understood} onChange={(e) => setUnderstood(e.target.checked)} />
-            <span>I understand and want this model to see full detail</span>
-          </label>
           <div className="btn-row">
-            <button type="button" className="btn small" disabled={!understood || busy} onClick={() => void apply("full")}>
+            <button type="button" className="btn small" disabled={busy} onClick={() => void apply("full")}>
               {busy && <span className="spinner" aria-hidden="true" />}
               {busy ? "Saving…" : "Share full detail"}
             </button>
@@ -240,8 +231,10 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
         </div>
       ) : (
         <div className="btn-row">
-          <button type="button" className="btn ghost small" onClick={() => setConfirming(true)}>
-            Allow full detail…
+          {/* a local model keeps everything on your network: no warning to confirm */}
+          <button type="button" className="btn ghost small" disabled={busy} onClick={() => (p.local ? void apply("full") : setConfirming(true))}>
+            {busy && <span className="spinner" aria-hidden="true" />}
+            {p.local ? "Allow full detail" : "Allow full detail…"}
           </button>
         </div>
       )}

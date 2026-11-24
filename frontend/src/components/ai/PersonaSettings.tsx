@@ -185,7 +185,7 @@ export function PersonaSettings() {
           <div className="field">
             <label htmlFor={id("country")}>Country you live in</label>
             <input id={id("country")} type="text" value={prefs.country} maxLength={MAX_COUNTRY} autoComplete="country-name" onChange={(e) => set("country", e.target.value)} placeholder="e.g. Hungary" aria-describedby={id("countryh")} />
-            <span id={id("countryh")} className="help">So the analyst compares the banks, brokers and apps you can actually use. Empty: it works it out from your data and asks when unsure.</span>
+            <span id={id("countryh")} className="help">So the analyst compares the banks, brokers and apps you can actually use. Empty: it works it out from your data and asks when unsure. Sent with every question.</span>
           </div>
           <div className="field wide">
             <label htmlFor={id("notes")}>Notes</label>

@@ -168,8 +168,11 @@ def save_settings(persona: str | None, preferences: dict | None, rules: list[str
             else:
                 conn.execute("INSERT INTO ai_settings VALUES ('persona', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (text[:20000],))
         if preferences is not None:
+            # merged over the stored ones: a save that lacks a key (an older tab, a partial update) keeps it
+            row = conn.execute("SELECT value FROM ai_settings WHERE key='preferences'").fetchone()
+            merged = {**normalize_preferences(json.loads(row[0]) if row else {}), **preferences}
             conn.execute("INSERT INTO ai_settings VALUES ('preferences', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                         (json.dumps(normalize_preferences(preferences)),))
+                         (json.dumps(normalize_preferences(merged)),))
         if rules is not None:
             kept = normalize_rules(rules)
             if kept:
@@ -183,6 +186,11 @@ def save_settings(persona: str | None, preferences: dict | None, rules: list[str
 # ---------------------------------------------------------------- context
 RELATIVE_ROW_KEYS = ("id", "name", "type", "currency", "symbol", "weight", "pnl_pct", "today_pct", "price_source", "as_of")
 FULL_ROW_KEYS = RELATIVE_ROW_KEYS + ("quantity", "price", "avg_cost", "value_base", "cost_base", "pnl_base", "today_base")
+
+
+def _text_or_none(value) -> str | None:
+    """Free text from a DataFrame row: NaN (an old row without the column) and blanks become None."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _r(x, nd=4):
@@ -206,7 +214,7 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
             lots = db.get_lots(r["id"])
             item["purchases"] = [{"date": l["buy_date"], "quantity": l["quantity"], "unit_price": l["unit_price"],
                                   "paid_amount": l["paid_amount"], "paid_currency": l["paid_currency"],
-                                  "platform": l.get("platform") or None}
+                                  "platform": _text_or_none(l.get("platform"))}
                                  for l in lots.to_dict("records")]
         holdings.append(item)
     totals = snapshot.get("totals", {})
@@ -236,7 +244,8 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
 def render_context(ctx: dict) -> str:
     """Context as tagged blocks; the persona tells the model these blocks are data, not instructions."""
     news = ctx.pop("news", [])
-    body = json.dumps({k: v for k, v in ctx.items()}, ensure_ascii=False, default=str)
+    # "<" escaped (still valid JSON), so a name or platform cannot close the data block early
+    body = json.dumps({k: v for k, v in ctx.items()}, ensure_ascii=False, default=str).replace("<", "\\u003c")
     news_lines = "\n".join(
         f"- [{n.get('published') or 'undated'}] {n['source']}: {n['title']} — {n.get('summary') or ''} ({n['url']})"
         for n in news

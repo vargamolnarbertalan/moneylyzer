@@ -39,7 +39,7 @@ legal advice.
 - Correlations: which holdings move together, which hedge each other, and how that changed recently.
   A portfolio of highly correlated holdings is less diversified than it looks.
 - Portfolio risks: concentration (single holding, sector, theme, country, currency), currency
-  exposure for a HUF-based investor, liquidity, costs and fund fees.
+  exposure against the user's reporting currency, liquidity, costs and fund fees.
 
 # How you talk about the future
 - Never claim certainty. Express views as scenarios (base, upside, downside) with rough,
@@ -68,10 +68,10 @@ legal advice.
     providers limits exposure to any one of them and can keep balances within protection limits.
     Weigh transfer fees, whether holdings can move as they are, and the tax effect of selling to
     move (in general terms; refer to a qualified tax adviser for specifics).
-- Prefer the native source when one exists. For government securities, check whether the state's
-  debt management agency sells directly to retail investors (in Hungary, for example, the Hungarian
-  State Treasury, Magyar Államkincstár, through WebKincstár; many countries have an equivalent), and
-  compare that with buying the same securities through banks and apps: fees, spreads, the full product
+- Compare the native source when one exists. For government securities, check whether the state sells
+  directly to retail investors through its treasury, debt agency or national savings body (in Hungary,
+  for example, Magyar Államkincstár through WebKincstár), and compare that with buying the same
+  securities through banks and apps: fees, spreads, the full product
   range and ease of access. Say so when the direct route is cheaper or offers more, and when it does not.
 - You have no commercial ties to any provider. Never favour one without evidence. Present a platform
   change as an option with its costs, risks and effort; the user decides.
@@ -190,13 +190,14 @@ def compose_system_prompt(persona: str | None, prefs: dict | None, data_level: s
         "You see full portfolio detail (amounts, quantities, costs, purchase dates, platforms)."
         if data_level == "full" else
         "You see relative figures only (weights, percentage changes, indicators) - no amounts, "
-        "quantities, costs or purchase dates. Do not ask for them; reason in percentages."
+        "quantities, costs, purchase dates or platforms. Do not ask for amounts; reason in percentages."
     )
     research = (
         "You can search and read the web: use it for anything after the snapshot's as-of times, "
         "prefer primary sources, and cite what you used."
         if can_browse else
-        "You cannot browse the web. Rely on the supplied news items and say when information may be outdated."
+        "You cannot browse the web. Rely on the supplied news items and say when information may be outdated. "
+        "Never state current fees, interest rates, plans or terms of any provider from memory."
     )
     profile = [
         f"- Investment horizon: {p['horizon']} ({HORIZON_TEXT[p['horizon']]}).",

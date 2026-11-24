@@ -204,6 +204,8 @@ export interface AppSettings {
 
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
 export type DataLevel = "relative" | "full";
+/** What "full detail" adds, in one place for every text that describes it (server: analyzer/persona.py). */
+export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, purchase dates and platforms";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {
