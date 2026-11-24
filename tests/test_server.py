@@ -261,8 +261,29 @@ class ApiTests(unittest.TestCase):
         # a chunked body (no Content-Length) is counted as it streams in
         chunks = (b"x" * 65536 for _ in range(40))
         self.assertEqual(self.client.patch("/api/prefs", content=chunks, headers=raw).status_code, 413)
+        # the limit is chosen by route, not by a content type the client picks
+        multi = {**H, "Content-Type": "multipart/form-data; boundary=x"}
+        self.assertEqual(self.client.patch("/api/prefs", content=b"x" * (3 * 1024 * 1024), headers=multi).status_code, 413)
+        # uploads get room for a 5 MB CSV; past that they are refused too
+        two_mib = b"a,b\n" + b"1,2\n" * (512 * 1024)
+        r = self.client.post("/api/import/holdings", files={"file": ("h.csv", two_mib, "text/csv")}, headers=H)
+        self.assertNotEqual(r.status_code, 413)
+        r = self.client.post("/api/import/holdings", files={"file": ("h.csv", b"x" * (7 * 1024 * 1024), "text/csv")}, headers=H)
+        self.assertEqual(r.status_code, 413)
+        # an AI question with a long conversation behind it is not cut off at 1 MiB (422: history is no list)
+        ask = '{"question": "hi", "history": "' + "x" * (2 * 1024 * 1024) + '"}'
+        self.assertEqual(self.client.post("/api/advisor/ask", content=ask, headers=raw).status_code, 422)
         # normal requests are untouched
         self.assertEqual(self.client.patch("/api/prefs", json={"theme": "light"}, headers=H).status_code, 200)
+
+    def test_edit_form_never_recreates_a_deleted_holding(self):
+        self.setup_account()
+        body = {"instrument_id": "GONE", "name": "Gone", "asset_type": "etf", "quantity": 1, "currency": "EUR"}
+        r = self.client.post("/api/instruments?update=1", json=body, headers=H)
+        self.assertEqual(r.status_code, 404)
+        self.assertFalse(any(i["instrument_id"] == "GONE" for i in self.client.get("/api/instruments", headers=H).json()))
+        self.assertEqual(self.client.post("/api/instruments?create=1", json=body, headers=H).status_code, 200)
+        self.assertEqual(self.client.post("/api/instruments?update=1", json={**body, "name": "Kept"}, headers=H).status_code, 200)
 
     def test_security_headers(self):
         r = self.client.get("/api/health")

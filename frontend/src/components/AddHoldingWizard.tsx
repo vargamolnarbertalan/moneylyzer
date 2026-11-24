@@ -348,7 +348,11 @@ function WhatStep({ d, setD, taken, savedHolding }: { d: Draft; setD: (f: (x: Dr
           setSearchError(null);
         }
       } catch (err) {
-        if (alive) setSearchError(errorMessage(err));
+        if (alive) {
+          // the previous query's results and "No match" line would otherwise stand under the error
+          setResults(null);
+          setSearchError(errorMessage(err));
+        }
       } finally {
         if (alive) setSearching(false);
       }

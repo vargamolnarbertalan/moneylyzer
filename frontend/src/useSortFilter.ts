@@ -107,7 +107,9 @@ export function useSortFilter<T>(config: SortFilterConfig<T>) {
     }
     const next = fn({ ...saved, query: localRef.current.query, selects: localRef.current.selects });
     if (next.sort !== saved.sort) setPref(PREFIX + cfg.id, { sort: next.sort, query: "", selects: {} });
-    setLocal({ query: next.query, selects: next.selects });
+    // updated at once, so a second edit before the re-render starts from this one, not the stale state
+    localRef.current = { query: next.query, selects: next.selects };
+    setLocal(localRef.current);
   }, []);
 
   const { rows } = config;

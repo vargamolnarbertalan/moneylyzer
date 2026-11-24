@@ -359,7 +359,7 @@ function detailMessage(status: number, payload: unknown): string {
     }
   }
   if (status === 403) return "The server refused the request.";
-  if (status === 413) return "That file is too large.";
+  if (status === 413) return "That is too much to send at once.";
   if (status >= 500) return `Server error (${status}).`;
   return `Request failed (${status}).`;
 }
@@ -434,7 +434,8 @@ export const endpoints = {
   history: (range: HistoryRange) => api.get<HistoryResponse>(`/api/portfolio/history?range=${encodeURIComponent(range)}`),
 
   instruments: () => api.get<Instrument[]>("/api/instruments"),
-  saveInstrument: (body: InstrumentInput) => api.post<{ ok: boolean }>("/api/instruments", body),
+  /** Update only: 404 if the holding was deleted meanwhile (the edit form must never re-create one). */
+  saveInstrument: (body: InstrumentInput) => api.post<{ ok: boolean }>("/api/instruments?update=1", body),
   /** Create only: 409 if the ID exists (the add-holding wizard must never overwrite a holding). */
   createInstrument: (body: InstrumentInput) => api.post<{ ok: boolean }>("/api/instruments?create=1", body),
   deleteInstrument: (id: string, confirmPurchases: number) =>

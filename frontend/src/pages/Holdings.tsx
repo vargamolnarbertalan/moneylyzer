@@ -365,7 +365,6 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved }: HoldingFormP
     const avg = parseDecimal(form.avg_cost);
     const div = parseDecimal(form.price_divisor);
     const currency = form.currency.trim().toUpperCase();
-    if (!id) return setError("Enter an instrument ID.");
     if (!form.name.trim()) return setError("Enter a name.");
     if (q === null || q < 0) return setError("Quantity must be a number, zero or more.");
     if (form.avg_cost.trim() !== "" && (avg === null || avg < 0)) return setError("Average cost must be a number, or leave it empty.");
@@ -399,7 +398,7 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved }: HoldingFormP
         <div className="form-grid">
           <div className="field">
             <label htmlFor={fid("id")}>Instrument ID</label>
-            <input id={fid("id")} value={form.instrument_id} onChange={set("instrument_id")} disabled autoComplete="off" spellCheck={false} required aria-describedby={fid("idh")} />
+            <input id={fid("id")} value={form.instrument_id} disabled autoComplete="off" spellCheck={false} aria-describedby={fid("idh")} />
             <span id={fid("idh")} className="help">
               The ID cannot change.
             </span>

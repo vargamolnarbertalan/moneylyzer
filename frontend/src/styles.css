@@ -215,6 +215,13 @@ code {
   overflow: hidden;
   white-space: nowrap;
 }
+/* If the name ever does not fit (user text spacing, WCAG 1.4.12), it ends in an ellipsis rather than
+   a hard cut; screen readers still get the whole name. */
+.side-head .brand span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .side-toggle:hover:not(:disabled) {
   color: var(--text);
 }

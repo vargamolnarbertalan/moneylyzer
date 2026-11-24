@@ -5,6 +5,8 @@ import { Alert } from "../components/Alert";
 import { Card, CardHeader } from "../components/Card";
 import { useTitle } from "../hooks";
 
+const MAX_CSV_BYTES = 5 * 1024 * 1024;
+
 interface ImportCardProps<R> {
   /** Its place in the import order (holdings first: the others refer to them). */
   step: number;
@@ -27,6 +29,8 @@ function ImportCard<R>({ step, title, blurb, endpoint, template, header, describ
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     if (!file) return setError("Choose a CSV file first.");
+    // the server refuses bigger bodies with a bare 413 before it reads the file (server/main.py MAX_UPLOAD_BYTES)
+    if (file.size > MAX_CSV_BYTES) return setError("File is larger than 5 MB.");
     setBusy(true);
     setError(null);
     setResult(null);

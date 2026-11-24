@@ -36,9 +36,12 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(os.environ.get("LIA_STATIC_DIR") or ROOT / "frontend" / "dist")
 COOKIE_SECURE = os.environ.get("LIA_COOKIE_SECURE") == "1"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
-# Request bodies: JSON is small (the largest is a 20 000-character persona); CSV uploads are capped at
-# MAX_UPLOAD_BYTES plus multipart overhead. Checked before the body is parsed or spooled to /tmp.
+# Request body limits (FastAPI max_body_size: Content-Length when sent, otherwise the streamed bytes are
+# counted; refused with 413 before the body is parsed or spooled to /tmp). Picked per route, never from a
+# client header. Most bodies are small JSON; an AI question carries up to 24 earlier messages, whose
+# answers can be long; CSV uploads are MAX_UPLOAD_BYTES plus multipart overhead.
 MAX_JSON_BODY = 1024 * 1024
+MAX_ASK_BODY = 4 * 1024 * 1024
 MAX_MULTIPART_BODY = MAX_UPLOAD_BYTES + 1024 * 1024
 DEFAULT_DONATE_URL = "https://revolut.me/vargamolnarb"
 
@@ -56,64 +59,8 @@ async def lifespan(app: FastAPI):
     task.cancel()
 
 
-app = FastAPI(title="Moneylyzer", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-
-
-class BodyLimit:
-    """Refuses oversized request bodies with 413 before anything reads them: by Content-Length when
-    the client sends one, and by counting the bytes of a chunked body as it streams in."""
-
-    def __init__(self, app):
-        self.app = app
-
-    async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
-            return await self.app(scope, receive, send)
-        headers = dict(scope.get("headers") or [])
-        ctype = headers.get(b"content-type", b"").decode("latin-1").lower()
-        limit = MAX_MULTIPART_BODY if ctype.startswith("multipart/") else MAX_JSON_BODY
-        declared = headers.get(b"content-length")
-        if declared is not None:
-            try:
-                too_big = int(declared) > limit
-            except ValueError:
-                too_big = True
-            if too_big:
-                return await self._refuse(send)
-        seen = 0
-        refused = False
-
-        async def counted():
-            # A chunked body is counted as it arrives. Past the limit the 413 goes out at once and the
-            # app is told the client left (FastAPI would turn an exception here into its own 400).
-            nonlocal seen, refused
-            if refused:
-                return {"type": "http.disconnect"}
-            message = await receive()
-            if message["type"] == "http.request":
-                seen += len(message.get("body", b""))
-                if seen > limit:
-                    refused = True
-                    await self._refuse(send)
-                    return {"type": "http.disconnect"}
-            return message
-
-        async def guarded_send(message):
-            if not refused:  # after a refusal nothing the app answers may reach the client
-                await send(message)
-
-        await self.app(scope, counted, guarded_send)
-
-    @staticmethod
-    async def _refuse(send):
-        body = b'{"detail":"Request body too large."}'
-        await send({"type": "http.response.start", "status": 413,
-                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
-        await send({"type": "http.response.body", "body": body})
-
-
-
-app.add_middleware(BodyLimit)
+app = FastAPI(title="Moneylyzer", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None,
+              max_body_size=MAX_JSON_BODY)
 
 
 @app.middleware("http")
@@ -361,8 +308,11 @@ def instruments(user: str = Depends(auth.require_user)):
 
 
 @app.post("/api/instruments")
-async def instrument_save(body: InstrumentBody, create: bool = False, user: str = Depends(auth.require_user)):
-    """Add or update a holding. With ?create=1 (the add-holding wizard) an existing ID is refused (409)."""
+async def instrument_save(body: InstrumentBody, create: bool = False, update: bool = False,
+                          user: str = Depends(auth.require_user)):
+    """Add or update a holding. With ?create=1 (the add-holding wizard) an existing ID is refused (409);
+    with ?update=1 (the edit form) a missing one is (404), so a holding deleted on another device is
+    not silently re-created from a stale form."""
     if body.asset_type not in ASSET_TYPE_CODES:
         raise HTTPException(400, f"asset_type must be one of {', '.join(ASSET_TYPE_CODES)}")
     row = body.model_dump()
@@ -371,6 +321,8 @@ async def instrument_save(body: InstrumentBody, create: bool = False, user: str 
     match = existing[existing["instrument_id"] == row["instrument_id"].strip()]
     if create and not match.empty:
         raise HTTPException(409, f"A holding with the ID {row['instrument_id'].strip()} already exists. Choose another ID.")
+    if update and match.empty:
+        raise HTTPException(404, "This holding no longer exists. It may have been deleted on another device.")
     if not match.empty and db.count_lots(row["instrument_id"].strip()):
         old = match.iloc[0]
         # Purchases are stored in the holding's currency and price convention; changing either would
@@ -518,7 +470,7 @@ async def _read_csv(file: UploadFile) -> pd.DataFrame:
         raise HTTPException(400, f"Could not read the CSV: {exc}") from None
 
 
-@app.post("/api/import/holdings")
+@app.post("/api/import/holdings", max_body_size=MAX_MULTIPART_BODY)
 async def import_holdings(file: UploadFile = File(...), user: str = Depends(auth.require_user)):
     frame = (await _read_csv(file)).replace("", None)
     try:
@@ -530,7 +482,7 @@ async def import_holdings(file: UploadFile = File(...), user: str = Depends(auth
     return {"imported": count}
 
 
-@app.post("/api/import/lots")
+@app.post("/api/import/lots", max_body_size=MAX_MULTIPART_BODY)
 async def import_lots(file: UploadFile = File(...), user: str = Depends(auth.require_user)):
     frame = await _read_csv(file)
     try:
@@ -542,7 +494,7 @@ async def import_lots(file: UploadFile = File(...), user: str = Depends(auth.req
     return {"added": added, "skipped_duplicates": skipped}
 
 
-@app.post("/api/import/prices")
+@app.post("/api/import/prices", max_body_size=MAX_MULTIPART_BODY)
 async def import_prices(file: UploadFile = File(...), user: str = Depends(auth.require_user)):
     frame = await _read_csv(file)
     missing = {"instrument_id", "date", "close"} - set(frame.columns)
@@ -734,7 +686,7 @@ def ai_settings_save(body: SettingsBody, user: str = Depends(auth.require_user))
         raise HTTPException(409, str(exc)) from None
 
 
-@app.post("/api/advisor/ask")
+@app.post("/api/advisor/ask", max_body_size=MAX_ASK_BODY)
 async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
     snapshot = hub.snapshot or await hub.refresh()
     if body.instrument_id and not any(r["id"] == body.instrument_id for r in snapshot.get("rows", [])):

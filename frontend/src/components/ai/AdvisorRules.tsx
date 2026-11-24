@@ -44,7 +44,8 @@ export function AdvisorRules() {
     const text = failedDelete.current;
     failedDelete.current = null;
     const again = [...(listRef.current?.querySelectorAll<HTMLButtonElement>("button[data-rule]") ?? [])].find((b) => b.dataset.rule === text);
-    (again ?? input.current)?.focus();
+    // the input is disabled while the list is full (a conflict reload can leave it at 30): then the list
+    (again ?? (input.current && !input.current.disabled ? input.current : listRef.current))?.focus();
   }, [busy, rules]);
   useEffect(() => {
     if (!refocus.current) return;
@@ -101,15 +102,12 @@ export function AdvisorRules() {
   const remove = async (index: number) => {
     const text = rules[index];
     refocus.current = true;
-    if (!(await save(
-      rules.filter((_, i) => i !== index),
-      "Rule deleted.",
-    ))) {
-      refocus.current = false;
-      // The button was disabled while saving, which drops keyboard focus: give it back to the same
-      // rule's delete button (by text: a conflict reload may have moved it), else the input.
-      failedDelete.current = text ?? null;
-    }
+    // The button is disabled while saving, which drops keyboard focus. If the delete fails, focus goes
+    // back to the same rule's delete button (by text: a conflict reload may have moved it), else the
+    // input. Set before saving: the effect that uses it may run as soon as busy clears, before save returns.
+    failedDelete.current = text ?? null;
+    if (await save(rules.filter((_, i) => i !== index), "Rule deleted.")) failedDelete.current = null;
+    else refocus.current = false;
   };
 
   const full = rules.length >= MAX_RULES;
@@ -123,7 +121,7 @@ export function AdvisorRules() {
       </p>
 
       {rules.length > 0 ? (
-        <ol ref={listRef} className="rules-list" aria-label="Your rules">
+        <ol ref={listRef} className="rules-list" aria-label="Your rules" tabIndex={-1}>
           {rules.map((r, i) => (
             <li key={r}>
               <span className="rule-n" aria-hidden="true">
