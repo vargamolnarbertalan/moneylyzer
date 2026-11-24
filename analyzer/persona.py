@@ -190,7 +190,9 @@ def compose_system_prompt(persona: str | None, prefs: dict | None, data_level: s
         "You see full portfolio detail (amounts, quantities, costs, purchase dates, platforms)."
         if data_level == "full" else
         "You see relative figures only (weights, percentage changes, indicators) - no amounts, "
-        "quantities, costs, purchase dates or platforms. Do not ask for amounts; reason in percentages."
+        "quantities, costs, purchase dates or platforms. Do not ask for amounts, quantities, costs or "
+        "purchase dates; reason in percentages. You may ask where the user holds investments or lives when an "
+        "answer depends on it."
     )
     research = (
         "You can search and read the web: use it for anything after the snapshot's as-of times, "

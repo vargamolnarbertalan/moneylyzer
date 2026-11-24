@@ -136,7 +136,8 @@ def correlations(holdings: dict[str, pd.Series], window_days: int = 90) -> dict:
                 pairs.append({"a": a, "b": b, "corr": round(float(v), 2)})
     pairs.sort(key=lambda x: -abs(x["corr"]))
     return {"window_days": window_days, "pairs": pairs[:40],
-            "note": "Daily log-return correlation; 1 = move together, -1 = opposite, ~0 = unrelated."}
+            "note": "Daily log-return correlation; 1 = move together, -1 = opposite, ~0 = unrelated. Only the 40 "
+                    "strongest pairs are listed; any pair not listed is weaker than the weakest one listed."}
 
 
 # ---------------------------------------------------------------- news

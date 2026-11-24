@@ -474,7 +474,7 @@ export const endpoints = {
   /** View preferences synced across devices (src/prefs.ts). PATCH sets or clears (null) only the keys sent. */
   prefs: () => api.get<Record<string, unknown>>("/api/prefs"),
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
-  saveAiSettings: (body: { persona?: string; preferences?: Preferences; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
+  saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
   ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),

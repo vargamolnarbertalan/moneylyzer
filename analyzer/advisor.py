@@ -7,6 +7,7 @@ Privacy: the context is built per provider data level.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 
 import pandas as pd
@@ -91,14 +92,14 @@ def save_provider(data: dict, api_key: str | None) -> str:
         data = {**data, "kind": "claude_code", "base_url": ""}  # the built-in route can change model/settings only
     p = Provider(id=pid, name=str(data.get("name") or "").strip()[:80] or "Model", kind=data["kind"],
                  model=str(data.get("model") or "").strip(), base_url=str(data.get("base_url") or "").strip(),
-                 data_level=data.get("data_level", "relative"), web_research=bool(data.get("web_research")),
+                 data_level="relative", web_research=bool(data.get("web_research")),
                  effort=data.get("effort", "high"))
     validate(p)
     with db.connect() as conn:
         conn.execute(
             "INSERT INTO ai_providers(id, name, kind, model, base_url, data_level, web_research, effort) "
             "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind, "
-            "model=excluded.model, base_url=excluded.base_url, data_level=excluded.data_level, "
+            "model=excluded.model, base_url=excluded.base_url, "
             "web_research=excluded.web_research, effort=excluded.effort",
             (p.id, p.name, p.kind, p.model, p.base_url, p.data_level, int(p.web_research), p.effort),
         )
@@ -194,7 +195,10 @@ def _text_or_none(value) -> str | None:
 
 
 def _r(x, nd=4):
-    return round(x, nd) if isinstance(x, float) else x
+    """Rounded floats; NaN (a missing value in a DataFrame column) becomes None, so the block stays valid JSON."""
+    if isinstance(x, float):
+        return None if math.isnan(x) else round(x, nd)
+    return x
 
 
 def build_context(snapshot: dict, level: str, instrument_id: str | None = None) -> dict:
@@ -212,8 +216,8 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
             series[f"{r['id']} ({r['name'][:24]})"] = s[~s.index.duplicated(keep="last")]
         if level == "full":
             lots = db.get_lots(r["id"])
-            item["purchases"] = [{"date": l["buy_date"], "quantity": l["quantity"], "unit_price": l["unit_price"],
-                                  "paid_amount": l["paid_amount"], "paid_currency": l["paid_currency"],
+            item["purchases"] = [{"date": l["buy_date"], "quantity": _r(l["quantity"]), "unit_price": _r(l["unit_price"]),
+                                  "paid_amount": _r(l["paid_amount"]), "paid_currency": _text_or_none(l["paid_currency"]),
                                   "platform": _text_or_none(l.get("platform"))}
                                  for l in lots.to_dict("records")]
         holdings.append(item)
@@ -249,7 +253,7 @@ def render_context(ctx: dict) -> str:
     news_lines = "\n".join(
         f"- [{n.get('published') or 'undated'}] {n['source']}: {n['title']} — {n.get('summary') or ''} ({n['url']})"
         for n in news
-    )
+    ).replace("<", "＜")  # third-party text: a decoded "</news>" must not end the block
     return (f"<portfolio_and_market>\n{body}\n</portfolio_and_market>\n"
             f"<news>\n{news_lines or '(no recent items)'}\n</news>")
 

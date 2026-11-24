@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, ShieldAlert, ShieldCheck } from "lucide-react";
 import { FULL_DETAIL_ITEMS, endpoints, errorMessage, type DataLevel, type Provider } from "../api";
 import { Alert } from "../components/Alert";
@@ -173,6 +173,7 @@ function AiSharing() {
 function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const row = useRef<HTMLLIElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The level the server just confirmed, shown until the reloaded list says the same: without it
   // the row would flip back to the old level for a moment and invite a second confirmation.
@@ -195,8 +196,19 @@ function ShareRow({ p, onChanged }: { p: Provider; onChanged: () => void }) {
   };
 
   const full = (confirmed ?? p.data_level) === "full";
+  // Each step replaces the button just used; if that dropped focus, give it to this row's next button
+  // (not on the first render: opening the page must not move focus).
+  const stepped = useRef(false);
+  useEffect(() => {
+    if (!stepped.current) {
+      stepped.current = true;
+      return;
+    }
+    const a = document.activeElement;
+    if (!busy && (!a || a === document.body)) row.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+  }, [full, confirming, busy]);
   return (
-    <li className={full ? "share-row full" : "share-row"}>
+    <li ref={row} className={full ? "share-row full" : "share-row"}>
       <span className="sr-only" role="status">
         {busy ? "Saving…" : ""}
       </span>
