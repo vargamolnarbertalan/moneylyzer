@@ -1,14 +1,14 @@
 // Advisor conversation helpers: the quick prompts, the sessionStorage-backed conversation, the hand-over
 // from the Overview card, and the history the API wants.
-import type { AdvisorAnswer, ChatTurn } from "./api";
+import type { AdvisorAnswer, ChatTurn, DataLevel } from "./api";
 import { readSession, removeSession, writeSession } from "./storage";
 
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
-  /** Only on answers. */
-  meta?: Pick<AdvisorAnswer, "provider" | "model" | "sources" | "shared">;
+  /** Only on answers. `withheld`: earlier full-detail answers not sent with this question. */
+  meta?: Pick<AdvisorAnswer, "provider" | "model" | "sources" | "shared"> & { withheld?: number };
 }
 
 export interface Chat {
@@ -118,12 +118,21 @@ export function takeQueuedQuestion(): { question: string; holding: string | null
   return { question: p.question, holding: typeof p.holding === "string" ? p.holding : null };
 }
 
-/** The last turns before a question, as the API wants them: plain question and answer text, at most 24 entries. */
-export function historyBefore(messages: readonly ChatMessage[], index: number): ChatTurn[] {
-  return messages
-    .slice(0, index)
-    .map((m) => ({ role: m.role, content: m.content }) satisfies ChatTurn)
-    .slice(-MAX_HISTORY);
+/** The last turns before a question, as the API wants them: plain question and answer text, at most 24
+ *  entries. A model on relative figures never gets an earlier answer written from full detail (it can
+ *  quote amounts) nor the question that led to it; `withheld` counts those answers. */
+export function historyBefore(messages: readonly ChatMessage[], index: number, level: DataLevel = "full"): { turns: ChatTurn[]; withheld: number } {
+  const kept: ChatMessage[] = [];
+  let withheld = 0;
+  for (const m of messages.slice(0, index)) {
+    if (level === "relative" && m.role === "assistant" && m.meta?.shared?.data_level === "full") {
+      withheld += 1;
+      if (kept[kept.length - 1]?.role === "user") kept.pop();
+      continue;
+    }
+    kept.push(m);
+  }
+  return { turns: kept.map((m) => ({ role: m.role, content: m.content }) satisfies ChatTurn).slice(-MAX_HISTORY), withheld };
 }
 
 /** Only http(s) links are ever rendered as links. */

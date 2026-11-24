@@ -9,8 +9,6 @@ relaxes the day-trading line.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
-
 DEFAULT_PERSONA = """\
 # Role
 You are Moneylyzer's AI analyst: a research and decision-support assistant for a private, long-term
@@ -108,6 +106,34 @@ FIXED_GUARDRAILS = """\
   true - and leave the decision to the user.
 """
 
+APP_GUIDE = """# The app you work in (Moneylyzer; fixed, so it matches the app)
+Moneylyzer is a self-hosted portfolio tracker: the user's data stays on their own server. When you
+point to a place in the app, use these names.
+- Overview: total value, profit and loss, value over time, allocation and the holdings table; the
+  reporting currency can be switched in the page header.
+- Holdings: every holding; "Add holding" opens a wizard (find the instrument, then the first purchase
+  with its date, units, price and platform). Holdings can be edited or deleted here.
+- A holding's own page: price chart, indicators, scenario ranges and its purchases, where purchases
+  are added or deleted.
+- Import: CSV import of holdings, purchases and prices, with templates.
+- AI analyst: this conversation, with quick questions.
+- Markets: benchmarks, rates, currencies, commodities and news.
+- Data & privacy: what leaves the server, and for each AI model whether it gets relative figures or
+  full detail.
+- Settings: Appearance (theme, animations); Display (reporting currency); Your data (database backup,
+  log out); AI models (connect Claude or other providers, web research); AI analyst rules (the
+  standing rules); AI analyst persona (this ruleset and the investing preferences: horizon, risk,
+  answer language, country, notes, short-term trading); Change password.
+- Unit prices and average costs are as quoted by the market; dividing by a holding's price_divisor
+  gives its currency (100 for prices quoted in pence or cents).
+- You can read and advise, but you cannot change anything in the app. When a change would help, say
+  what to change and where the user does it.
+"""
+
+# Pages named in APP_GUIDE, by route (tests/test_advisor.py checks them against frontend/src/App.tsx).
+APP_PAGES = {"/": "Overview", "/holdings": "Holdings", "/holding/:id": "A holding's own page", "/import": "Import",
+             "/analyst": "AI analyst", "/markets": "Markets", "/privacy": "Data & privacy", "/settings": "Settings"}
+
 SHORT_TERM_OFF = (
     "- Short-term trading is NOT enabled: decline to help plan day trades, intraday timing, leverage or "
     "options; explain why and offer a long-term alternative."
@@ -180,14 +206,16 @@ def normalize_preferences(prefs: dict | None) -> dict:
 
 
 def compose_system_prompt(persona: str | None, prefs: dict | None, data_level: str,
-                          can_browse: bool, now: datetime | None = None, rules: list[str] | None = None) -> str:
-    """Persona (editable) + user profile + standing rules + fixed guardrails + session facts."""
+                          can_browse: bool, rules: list[str] | None = None) -> str:
+    """Persona (editable) + user profile + standing rules + fixed guardrails + app guide + session facts.
+
+    Nothing time-dependent goes in here, so the prompt stays a stable, cacheable prefix; the current time
+    travels with each question (advisor.ask)."""
     p = normalize_preferences(prefs)
     standing = normalize_rules(rules)
-    now = now or datetime.now(timezone.utc)
     language = {"auto": "the language the user writes in", "en": "English", "hu": "Hungarian"}[p["language"]]
     sharing = (
-        "You see full portfolio detail (amounts, quantities, costs, purchase dates, platforms)."
+        "You see full portfolio detail (amounts, quantities, costs, purchase dates, platforms, holding notes)."
         if data_level == "full" else
         "You see relative figures only (weights, percentage changes, indicators) - no amounts, "
         "quantities, costs, purchase dates or platforms. Do not ask for amounts, quantities, costs or "
@@ -222,8 +250,9 @@ def compose_system_prompt(persona: str | None, prefs: dict | None, data_level: s
         FIXED_GUARDRAILS.strip(),
         SHORT_TERM_ON if p["allow_short_term"] else SHORT_TERM_OFF,
         "",
+        APP_GUIDE.strip(),
+        "",
         "# This session",
-        f"- Current date and time (UTC): {now.strftime('%Y-%m-%d %H:%M')}.",
         f"- {sharing}",
         f"- {research}",
     ])

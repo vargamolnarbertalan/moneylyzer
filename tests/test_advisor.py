@@ -1,8 +1,10 @@
 """Advisor layer: providers, persona, context privacy, feeds. No real network or model calls."""
 import json
+import re
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +69,17 @@ class PersonaTests(unittest.TestCase):
         self.assertIn("- Country of residence (as the user wrote it): Hungary.", text)
         unset = persona.compose_system_prompt(None, {}, "relative", True)
         self.assertIn("Country of residence: not set", unset)
+
+    def test_app_guide_matches_the_apps_routes(self):
+        app = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+        app = app[app.index("function route("):app.index("function AuthedApp")]  # pages only, not /login or redirects
+        routes = set(re.findall(r'path === "([^"]+)"', app)) | set(re.findall(r'matchPath\("([^"]+)"', app))
+        self.assertEqual(routes, set(persona.APP_PAGES))  # a page added or renamed must reach the guide
+        for name in persona.APP_PAGES.values():
+            self.assertIn(f"- {name}", persona.APP_GUIDE)
+        text = persona.compose_system_prompt("Short persona.", {}, "relative", False)
+        self.assertIn("you cannot change anything in the app", text)  # fixed: an edited persona keeps it
+        self.assertLess(text.index("Non-negotiable guardrails"), text.index("# The app you work in"))
 
     def test_default_persona_checks_platform_terms_live(self):
         text = persona.compose_system_prompt(None, {}, "relative", False)
@@ -343,6 +356,24 @@ class ContextPrivacyTests(TempDb):
         self.assertEqual(captured["messages"][0]["content"], "earlier")
         self.assertIn("<question>", captured["messages"][-1]["content"])
         self.assertIn("Non-negotiable guardrails", captured["system"])
+        # the time goes with the question; the system prompt stays the same from call to call (cacheable)
+        self.assertIn("Current date and time (UTC):", captured["messages"][-1]["content"])
+        self.assertNotIn("Current date", captured["system"])
+        first = captured["system"]
+        with mock.patch("analyzer.advisor.complete", fake_complete):
+            advisor.ask(None, "Again", [], self.snapshot(), now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+        self.assertEqual(captured["system"], first)
+        self.assertIn("2030-01-01 00:00", captured["messages"][-1]["content"])
+
+    def test_notes_only_at_full_detail_price_units_always(self):
+        db.upsert_instrument({"instrument_id": "DEMO", "name": "Demo ETF", "asset_type": "etf", "currency": "EUR",
+                              "price_divisor": 100, "notes": "Inherited from grandma, keep"})
+        rel = advisor.build_context(self.snapshot(), "relative")["portfolio"]["holdings"][0]
+        full = advisor.build_context(self.snapshot(), "full")["portfolio"]["holdings"][0]
+        self.assertNotIn("notes", rel)
+        self.assertEqual(full["notes"], "Inherited from grandma, keep")
+        self.assertEqual(rel["price_divisor"], 100.0)
+        self.assertEqual(full["price_divisor"], 100.0)
 
     def test_rules_are_stored_apart_from_preferences(self):
         advisor.save_settings(None, None, rules=["Only EUR holdings"])

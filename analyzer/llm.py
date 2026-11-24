@@ -191,7 +191,11 @@ def _anthropic(p: Provider, system: str, messages: list[dict]) -> dict:
     if not key:
         raise LLMError("No API key saved for this provider.")
     client = anthropic.Anthropic(api_key=key, base_url=p.base_url or None, timeout=TIMEOUT_SECONDS, max_retries=2)
-    params: dict = {"model": p.model, "max_tokens": MAX_TOKENS, "system": system,
+    # The system prompt holds nothing time-dependent, so it is marked for caching: a follow-up within the
+    # cache lifetime reads it instead of paying for it again (below the model's minimum cacheable length
+    # it is simply not cached).
+    params: dict = {"model": p.model, "max_tokens": MAX_TOKENS,
+                    "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                     "messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
     if p.model in EFFORT_MODELS:
         params["output_config"] = {"effort": p.effort}

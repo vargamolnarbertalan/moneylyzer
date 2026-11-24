@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -205,8 +206,13 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
     rows = snapshot.get("rows", [])
     keys = FULL_ROW_KEYS if level == "full" else RELATIVE_ROW_KEYS
     holdings, series = [], {}
+    instruments = {str(i["instrument_id"]): i for i in db.get_instruments().to_dict("records")}
     for r in rows:
         item = {k: _r(r.get(k)) for k in keys}
+        inst = instruments.get(str(r["id"]), {})
+        item["price_divisor"] = _r(float(inst.get("price_divisor") or 1))
+        if level == "full" and isinstance(inst.get("notes"), str) and inst["notes"].strip():
+            item["notes"] = inst["notes"].strip()  # the owner's own words about the holding
         hist = db.get_prices(r["id"])
         if not hist.empty:
             m = analyze_history({"asset_type": r["type"]}, hist)
@@ -259,7 +265,7 @@ def render_context(ctx: dict) -> str:
 
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
-        instrument_id: str | None = None) -> dict:
+        instrument_id: str | None = None, now: datetime | None = None) -> dict:
     question = (question or "").strip()
     if not question:
         raise ValueError("Ask a question first.")
@@ -269,12 +275,15 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     settings = get_settings()
     ctx = build_context(snapshot, provider.data_level, instrument_id)
     shared = {"data_level": provider.data_level, "holdings": len(ctx["portfolio"]["holdings"]),
+              "notes": sum(1 for h in ctx["portfolio"]["holdings"] if h.get("notes")),
               "benchmarks": len(ctx["market"]), "news_items": len(ctx["news"]), "web_research": provider.can_browse}
     system = compose_system_prompt(settings["persona"], settings["preferences"], provider.data_level, provider.can_browse,
                                    rules=settings["rules"])
     turns = [m for m in (history or []) if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     turns = turns[-2 * MAX_HISTORY_TURNS:]
     focus = f"\nFocus on holding {instrument_id}." if instrument_id else ""
-    user_msg = f"{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
+    # The time travels with the question, not in the system prompt, which stays a stable cacheable prefix.
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
+    user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}])
     return {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind}, "shared": shared}

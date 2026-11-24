@@ -13,7 +13,9 @@ export const KIND_LABEL: Record<ProviderKind, string> = {
 const EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
 const CUSTOM: Preset = { id: "custom", label: "Custom OpenAI-compatible", kind: "openai_compat", base_url: "", models: [], local: false, needs_key: false };
 const LOCAL_HINT =
-  "From the Docker container your PC is host.docker.internal. Ollama listens on 127.0.0.1 by default; if the container can't reach it, start Ollama with OLLAMA_HOST=0.0.0.0.";
+  "From the Docker container your PC is host.docker.internal. Ollama listens on 127.0.0.1 by default; if the container can't reach it, start Ollama with OLLAMA_HOST=0.0.0.0. " +
+  // measured: the system prompt alone reaches ~3,000 tokens with full rules and notes; data and news add more
+  "Set the model's context window to at least 8,000 tokens: the analyst's instructions and your portfolio need about that much, and a shorter window can cut off part of the instructions, safety rules included.";
 
 /** The same rule the server uses to decide that a base URL stays on your network. */
 export function isLocalUrl(url: string): boolean {

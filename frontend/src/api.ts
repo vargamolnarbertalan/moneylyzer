@@ -283,6 +283,8 @@ export interface AdvisorShared {
   benchmarks: number;
   news_items: number;
   web_research: boolean;
+  /** Holdings whose notes were sent (full detail only). */
+  notes?: number;
 }
 
 export interface AdvisorSource {
