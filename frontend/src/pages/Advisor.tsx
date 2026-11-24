@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type K
 import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
 import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
-import { FULL_DETAIL_ITEMS, endpoints, errorMessage, type Provider } from "../api";
+import { ApiError, FULL_DETAIL_ITEMS, endpoints, errorMessage, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
 import { Select } from "../components/Select";
@@ -23,6 +23,8 @@ export function AdvisorPage() {
   chatRef.current = chat;
   const [waiting, setWaiting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // the model's sharing level changed (409): retrying cannot work, only a new conversation
+  const [stale, setStale] = useState(false);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -72,10 +74,15 @@ export function AdvisorPage() {
         const res = await endpoints.ask(body);
         setChat((c) => ({
           ...c,
+          providerId: c.providerId ?? res.provider.id, // later questions go to the model that answered, not a new default
           messages: [...c.messages, { id: newId(), role: "assistant", content: res.text, meta: { provider: res.provider, model: res.model, sources: res.sources ?? [], shared: res.shared } }],
         }));
       } catch (err) {
         setFailure(errorMessage(err));
+        if (err instanceof ApiError && err.status === 409) {
+          setStale(true);
+          providers.reload();
+        }
       } finally {
         busy.current = false;
         setWaiting(false);
@@ -124,8 +131,9 @@ export function AdvisorPage() {
 
   const newConversation = () => {
     clearChat();
-    setChat({ providerId: chat.providerId, messages: [] });
+    setChat({ providerId: selected?.id ?? null, messages: [] });
     setFailure(null);
+    setStale(false);
     setDraft("");
   };
 
@@ -145,6 +153,8 @@ export function AdvisorPage() {
               id={modelId}
               value={selected?.id ?? ""}
               disabled={waiting || list.length === 0}
+              noClosedTypeahead
+              aria-describedby={empty ? undefined : `${modelId}h`}
               onValueChange={(v) => {
                 // another model starts a new conversation: earlier answers stay with the model (and the
                 // sharing level) they were written for
@@ -152,6 +162,7 @@ export function AdvisorPage() {
                 clearChat();
                 setChat({ providerId: v, messages: [] });
                 setFailure(null);
+                setStale(false);
               }}
               options={
                 list.length === 0
@@ -159,6 +170,11 @@ export function AdvisorPage() {
                   : list.map((p) => ({ value: p.id, label: `${p.name} · ${p.model}` }))
               }
             />
+            {!empty && (
+              <span id={`${modelId}h`} className="help">
+                Changing the model starts a new conversation.
+              </span>
+            )}
           </div>
           <div className="chat-head-side">
             {selected && (
@@ -244,7 +260,7 @@ export function AdvisorPage() {
           {failure && !waiting && (
             <Alert tone="err">
               {failure}
-              {lastIsUser && (
+              {lastIsUser && !stale && (
                 <>
                   {" "}
                   <button type="button" className="link-btn" onClick={retry}>

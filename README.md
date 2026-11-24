@@ -95,7 +95,7 @@ The **Data & privacy** page in the app lists every outgoing request in detail. I
   and what you type in the add-holding search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
 - Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
   persona and investing preferences, and weights and percentage changes. Amounts, quantities, costs,
-  purchase dates and platforms are sent only to a model you set to full detail.
+  purchase dates, platforms and holding notes are sent only to a model you set to full detail.
 - Never sent anywhere: the database, your account, your CSV files. The app has no telemetry.
 
 ## Your data and backups

@@ -137,6 +137,8 @@ When you point to a place in the app, use these names.
 
 # Pages named in APP_GUIDE, by route, with their titles; tests/test_advisor.py checks them against the routes
 # in frontend/src/App.tsx and the Settings section titles against the Settings page.
+SETTINGS_SECTIONS = ("Appearance", "Display", "Your data", "About", "AI models", "AI analyst rules",
+                     "AI analyst persona", "More", "Change password")
 APP_PAGES = {"/": "Overview", "/holdings": "Holdings", "/holding/:id": "Holding", "/import": "Import",
              "/analyst": "AI analyst", "/markets": "Markets", "/privacy": "Data & privacy", "/settings": "Settings"}
 

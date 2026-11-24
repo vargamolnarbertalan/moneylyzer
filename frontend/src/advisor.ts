@@ -130,11 +130,9 @@ export function historyBefore(messages: readonly ChatMessage[], index: number): 
  *  at one level: the server refuses to continue it on a model whose level differs, so answers written
  *  from full detail never reach a model on relative figures. */
 export function conversationLevel(messages: readonly ChatMessage[]): DataLevel | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const level = messages[i]?.meta?.shared?.data_level;
-    if (level) return level;
-  }
-  return undefined;
+  const levels = messages.map((m) => m.meta?.shared?.data_level).filter((l): l is DataLevel => l !== undefined);
+  if (levels.length === 0) return undefined;
+  return levels.includes("full") ? "full" : "relative"; // one full-detail answer makes the conversation full detail
 }
 
 /** Only http(s) links are ever rendered as links. */

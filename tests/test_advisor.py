@@ -78,14 +78,16 @@ class PersonaTests(unittest.TestCase):
         for pattern, title in re.findall(r'matchPath\("([^"]+)".*?\n.*?title: "([^"]+)"', app):
             titles[pattern] = title
         self.assertEqual(titles, persona.APP_PAGES)  # a page added, removed or renamed must reach the guide
+        self.assertEqual(len(titles), app.count('title: "') - 1)  # every page was read (minus "Not found")
         for name in persona.APP_PAGES.values():
-            self.assertIn(f"- {name}", persona.APP_GUIDE)
+            self.assertIn(f"- {name}:", persona.APP_GUIDE)
         src = Path(__file__).resolve().parents[1] / "frontend" / "src"
         sections = set()
         for rel in ("pages/Settings.tsx", "components/ai/AiModels.tsx", "components/ai/AdvisorRules.tsx",
                     "components/ai/PersonaSettings.tsx"):
             sections |= set(re.findall(r'title="([^"]+)"', (src / rel).read_text(encoding="utf-8")))
         sections -= {"Delete rule"}  # a button tooltip, not a section
+        self.assertEqual(sections, set(persona.SETTINGS_SECTIONS))  # added or removed sections reach the guide
         settings_line = persona.APP_GUIDE[persona.APP_GUIDE.index("- Settings:"):]
         for section in sections:
             self.assertIn(section, settings_line, f"Settings section {section!r} missing from the app guide")
@@ -364,7 +366,8 @@ class ContextPrivacyTests(TempDb):
 
         with mock.patch("analyzer.advisor.complete", fake_complete):
             out = advisor.ask(None, "How concentrated am I?", [{"role": "user", "content": "earlier"},
-                                                              {"role": "assistant", "content": "reply"}], self.snapshot())
+                                                              {"role": "assistant", "content": "reply"}], self.snapshot(),
+                              expected_level="relative")
         self.assertEqual(out["shared"]["data_level"], "relative")
         self.assertEqual(captured["messages"][0]["content"], "earlier")
         self.assertIn("<question>", captured["messages"][-1]["content"])
@@ -379,11 +382,16 @@ class ContextPrivacyTests(TempDb):
         self.assertIn("2030-01-01 00:00", captured["messages"][-1]["content"])
 
     def test_a_conversation_stays_at_its_sharing_level(self):
-        with mock.patch("analyzer.advisor.complete", lambda p, s, m: {"text": "ok", "model": "m", "sources": []}):
+        sent = mock.Mock(return_value={"text": "ok", "model": "m", "sources": []})
+        history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "777 units"}]
+        with mock.patch("analyzer.advisor.complete", sent):
             with self.assertRaises(advisor.LevelChanged):  # the built-in model is on relative figures
-                advisor.ask(None, "And now?", [{"role": "user", "content": "q"}, {"role": "assistant", "content": "777 units"}],
-                            self.snapshot(), expected_level="full")
-            self.assertEqual(advisor.ask(None, "q", [], self.snapshot(), expected_level="relative")["text"], "ok")
+                advisor.ask(None, "And now?", history, self.snapshot(), expected_level="full")
+            with self.assertRaises(advisor.LevelChanged):  # answers but no level (an old tab): refused too
+                advisor.ask(None, "And now?", history, self.snapshot())
+            sent.assert_not_called()  # a refused question reaches no model
+            self.assertEqual(advisor.ask(None, "q", [], self.snapshot())["text"], "ok")  # a new conversation always works
+            self.assertEqual(advisor.ask(None, "q", history, self.snapshot(), expected_level="relative")["text"], "ok")
 
     def test_notes_only_at_full_detail_price_units_always(self):
         db.upsert_instrument({"instrument_id": "DEMO", "name": "Demo ETF", "asset_type": "etf", "currency": "EUR",

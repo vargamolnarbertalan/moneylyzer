@@ -2,7 +2,8 @@
 
 Privacy: the context is built per provider data level.
 - "relative" (default): names, tickers, types, currencies, weights, % changes, indicators.
-- "full": additionally amounts in the reporting currency, quantities, average costs and purchase lots with dates.
+- "full": additionally amounts in the reporting currency, quantities, average costs, purchase lots with dates
+  and platforms, holding notes and data checks.
 """
 from __future__ import annotations
 
@@ -121,7 +122,8 @@ def delete_provider(provider_id: str) -> None:
 
 
 def set_data_level(provider_id: str, level: str) -> None:
-    """What a model may see: 'relative' (weights, % changes) or 'full' (amounts, quantities, dates)."""
+    """What a model may see: 'relative' (weights, % changes) or 'full' (also amounts, quantities, costs, dates,
+    platforms and holding notes)."""
     if level not in ("relative", "full"):
         raise ValueError("data_level must be relative or full")
     with db.connect() as conn:
@@ -281,7 +283,10 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     if len(question) > MAX_QUESTION_CHARS:
         raise ValueError(f"Keep the question under {MAX_QUESTION_CHARS} characters.")
     provider = get_provider(provider_id)
-    if expected_level and expected_level != provider.data_level:
+    # A conversation with answers must say which level they were written at, and match the model's level
+    # (a tab with older code sends none). A new conversation is never refused.
+    answered = any(m.get("role") == "assistant" for m in (history or []))
+    if answered and expected_level != provider.data_level:
         raise LevelChanged("This model's sharing level changed since this conversation started. "
                            "Start a new conversation to go on.")
     settings = get_settings()

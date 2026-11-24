@@ -705,7 +705,7 @@ def ai_provider_delete(provider_id: str, user: str = Depends(auth.require_user))
 
 class DataLevelBody(BaseModel):
     data_level: Literal["relative", "full"]
-    # "full" sends amounts, quantities, purchase dates and platforms to the model: the client must confirm it explicitly
+    # "full" sends amounts, quantities, costs, purchase dates, platforms and holding notes: the client must confirm it
     confirm_full: bool = False
 
 

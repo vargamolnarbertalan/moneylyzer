@@ -15,7 +15,7 @@ const CUSTOM: Preset = { id: "custom", label: "Custom OpenAI-compatible", kind: 
 const LOCAL_HINT =
   "From the Docker container your PC is host.docker.internal. Ollama listens on 127.0.0.1 by default; if the container can't reach it, start Ollama with OLLAMA_HOST=0.0.0.0. " +
   // measured: instructions 2-9k tokens (default to longest custom persona), news up to ~9k, plus holdings and history
-  "Set the model's context window to 32,000 tokens or more: a typical question with its instructions, portfolio and news is about 15,000, and a shorter window cuts off the start, safety rules included.";
+  "Give the model a context window of 32,000 tokens or more (Ollama: OLLAMA_CONTEXT_LENGTH=32768; LM Studio: Context Length when loading the model; llama.cpp: -c 32768). A typical question with its instructions, portfolio and news is about 15,000 tokens, and a shorter window cuts off the start, safety rules included.";
 
 /** The same rule the server uses to decide that a base URL stays on your network. */
 export function isLocalUrl(url: string): boolean {
