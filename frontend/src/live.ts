@@ -2,7 +2,7 @@
 // No simulated data: everything shown comes from the snapshot the backend pushes.
 import { useEffect, useSyncExternalStore } from "react";
 import { endpoints, errorMessage, type Snapshot } from "./api";
-import { isNum } from "./format";
+import { isNum, money } from "./format";
 
 export type FlashDir = "up" | "down";
 export type StreamPhase = "connecting" | "open" | "reconnecting";
@@ -41,7 +41,10 @@ function applySnapshot(snap: Snapshot): void {
     const before = new Map(prev.rows.map((r) => [r.id, r.value_base] as const));
     for (const r of snap.rows) {
       const old = before.get(r.id);
-      if (isNum(old) && isNum(r.value_base) && old !== r.value_base) flashes[r.id] = r.value_base > old ? "up" : "down";
+      // Only a change the reader can see flashes: compare the amounts as the row prints them.
+      if (isNum(old) && isNum(r.value_base) && money(old, snap.base_currency) !== money(r.value_base, snap.base_currency)) {
+        flashes[r.id] = r.value_base > old ? "up" : "down";
+      }
     }
   }
   setState({ snapshot: snap, loaded: true, loadError: null, flashes });

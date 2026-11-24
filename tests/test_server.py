@@ -253,6 +253,17 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(r.headers["content-type"].startswith("image/svg+xml"))
         self.assertEqual(r.content, (main.STATIC_DIR / "logo.svg").read_bytes())
 
+    def test_oversized_request_bodies_are_refused(self):
+        self.setup_account()
+        big = '{"theme": "' + "x" * (2 * 1024 * 1024) + '"}'
+        raw = {**H, "Content-Type": "application/json"}
+        self.assertEqual(self.client.patch("/api/prefs", content=big, headers=raw).status_code, 413)
+        # a chunked body (no Content-Length) is counted as it streams in
+        chunks = (b"x" * 65536 for _ in range(40))
+        self.assertEqual(self.client.patch("/api/prefs", content=chunks, headers=raw).status_code, 413)
+        # normal requests are untouched
+        self.assertEqual(self.client.patch("/api/prefs", json={"theme": "light"}, headers=H).status_code, 200)
+
     def test_security_headers(self):
         r = self.client.get("/api/health")
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])

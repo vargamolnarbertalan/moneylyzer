@@ -37,6 +37,15 @@ export function AdvisorRules() {
 
   // After a delete the row's button is gone: focus the input once it is re-enabled (it is disabled at 30).
   const refocus = useRef(false);
+  const failedDelete = useRef<string | null>(null);
+  const listRef = useRef<HTMLOListElement | null>(null);
+  useEffect(() => {
+    if (busy || failedDelete.current === null) return;
+    const text = failedDelete.current;
+    failedDelete.current = null;
+    const again = [...(listRef.current?.querySelectorAll<HTMLButtonElement>("button[data-rule]") ?? [])].find((b) => b.dataset.rule === text);
+    (again ?? input.current)?.focus();
+  }, [busy, rules]);
   useEffect(() => {
     if (!refocus.current) return;
     refocus.current = false;
@@ -90,11 +99,17 @@ export function AdvisorRules() {
   };
 
   const remove = async (index: number) => {
+    const text = rules[index];
     refocus.current = true;
     if (!(await save(
       rules.filter((_, i) => i !== index),
       "Rule deleted.",
-    ))) refocus.current = false;
+    ))) {
+      refocus.current = false;
+      // The button was disabled while saving, which drops keyboard focus: give it back to the same
+      // rule's delete button (by text: a conflict reload may have moved it), else the input.
+      failedDelete.current = text ?? null;
+    }
   };
 
   const full = rules.length >= MAX_RULES;
@@ -108,14 +123,14 @@ export function AdvisorRules() {
       </p>
 
       {rules.length > 0 ? (
-        <ol className="rules-list" aria-label="Your rules">
+        <ol ref={listRef} className="rules-list" aria-label="Your rules">
           {rules.map((r, i) => (
             <li key={r}>
               <span className="rule-n" aria-hidden="true">
                 {i + 1}
               </span>
               <span className="rule-text">{r}</span>
-              <button type="button" className="icon-btn" onClick={() => void remove(i)} disabled={busy} aria-label={`Delete rule ${i + 1}: ${r}`} title="Delete rule">
+              <button type="button" className="icon-btn" data-rule={r} onClick={() => void remove(i)} disabled={busy} aria-label={`Delete rule ${i + 1}: ${r}`} title="Delete rule">
                 <Trash2 />
               </button>
             </li>

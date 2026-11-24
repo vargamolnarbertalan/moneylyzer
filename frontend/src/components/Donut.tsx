@@ -1,4 +1,5 @@
 import { useId, useState } from "react";
+import { useFrozenOrder } from "../useFrozenOrder";
 import type { Row } from "../api";
 import { chipColor } from "../chip";
 import { compactMoney, plainPct } from "../format";
@@ -6,6 +7,7 @@ import { reducedMotion } from "../motion";
 import { Link, navigate } from "../router";
 
 const CX = 60;
+const legendKey = (r: Row) => r.id;
 const R_OUT = 52;
 const R_IN = 34;
 
@@ -38,6 +40,8 @@ export function Donut({
   const [sweeping, setSweeping] = useState(() => !reducedMotion());
   const sum = rows.reduce((s, r) => s + (r.weight as number), 0) || 1;
   const legend = rows.slice(0, 6);
+  // A live re-sort must not drop focus from a legend link (see useFrozenOrder).
+  const legendOrder = useFrozenOrder(legend, legendKey);
   const rest = rows.slice(6);
   const restWeight = rest.reduce((s, r) => s + (r.weight as number), 0);
 
@@ -133,8 +137,8 @@ export function Donut({
           {compactMoney(total, base)}
         </text>
       </svg>
-      <ul className="legend" aria-label="Largest holdings">
-        {legend.map((r) => (
+      <ul className="legend" aria-label="Largest holdings" onFocus={legendOrder.onFocus} onBlur={legendOrder.onBlur}>
+        {legendOrder.ordered.map((r) => (
           <li key={r.id}>
             <Link
               to={`/holding/${encodeURIComponent(r.id)}`}

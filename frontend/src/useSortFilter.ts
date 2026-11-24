@@ -4,7 +4,7 @@
 //  - filter: free text (case- and diacritics-insensitive, every word must match) + optional select filters.
 //  - the choice is remembered per table and synced across devices (prefs key "table:<id>", src/prefs.ts).
 // Live updates only change `rows`; the state (sort, filter) lives here and is never reset by them.
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { getPref, setPref, usePrefValue } from "./prefs";
 
 export type Dir = "asc" | "desc";
@@ -36,6 +36,10 @@ export interface SortFilterConfig<T> {
   /** The order when the user has not picked one. */
   defaultSort?: SortSpec;
   selects?: readonly SelectDef<T>[];
+  /** false: only the sort order is saved (shared by every copy of the table); the filter belongs to
+   *  this one view and is forgotten when it goes. For tables shown per item (a holding's purchases),
+   *  where a filter typed on one item must not silently apply on the next. Default true. */
+  saveFilter?: boolean;
 }
 
 interface State {
@@ -86,10 +90,24 @@ export function useSortFilter<T>(config: SortFilterConfig<T>) {
   // The state IS the synced pref: a change from another device shows at once, and every edit starts
   // from the freshest stored value (never from a copy taken at mount).
   const stored = usePrefValue(PREFIX + config.id);
-  const state = useMemo(() => loadState(cfgRef.current, stored), [stored]);
+  const saveFilter = config.saveFilter ?? true;
+  const [local, setLocal] = useState<Pick<State, "query" | "selects">>({ query: "", selects: {} });
+  const localRef = useRef(local);
+  localRef.current = local;
+  const state = useMemo(() => {
+    const loaded = loadState(cfgRef.current, stored);
+    return saveFilter ? loaded : { ...loaded, query: local.query, selects: local.selects };
+  }, [stored, saveFilter, local]);
   const setState = useCallback((fn: (s: State) => State) => {
     const cfg = cfgRef.current;
-    setPref(PREFIX + cfg.id, fn(loadState(cfg, getPref(PREFIX + cfg.id))));
+    const saved = loadState(cfg, getPref(PREFIX + cfg.id));
+    if (cfg.saveFilter ?? true) {
+      setPref(PREFIX + cfg.id, fn(saved));
+      return;
+    }
+    const next = fn({ ...saved, query: localRef.current.query, selects: localRef.current.selects });
+    if (next.sort !== saved.sort) setPref(PREFIX + cfg.id, { sort: next.sort, query: "", selects: {} });
+    setLocal({ query: next.query, selects: next.selects });
   }, []);
 
   const { rows } = config;

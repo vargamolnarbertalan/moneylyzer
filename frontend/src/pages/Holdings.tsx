@@ -77,9 +77,9 @@ export function HoldingsPage() {
   const formRef = useRef<HTMLFormElement | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
 
+  // Adding goes through the wizard; this form only edits an existing holding.
   const open = (mode: "add" | { edit: Instrument }) => {
     if (mode === "add") {
-      setForm(EMPTY);
       setEditing({ mode: "add" });
     } else {
       setForm(toForm(mode.edit));
@@ -249,7 +249,6 @@ export function HoldingsPage() {
         {editing?.mode === "edit" && (
           <HoldingForm
             formRef={formRef}
-            mode={editing.mode}
             form={form}
             setForm={setForm}
             onCancel={() => setEditing(null)}
@@ -342,16 +341,16 @@ export function HoldingsPage() {
   );
 }
 
+/** Edits an existing holding (adding one is AddHoldingWizard's job). */
 interface HoldingFormProps {
   formRef: RefObject<HTMLFormElement | null>;
-  mode: "add" | "edit";
   form: FormState;
   setForm: (f: FormState) => void;
   onCancel: () => void;
   onSaved: () => void;
 }
 
-function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: HoldingFormProps) {
+function HoldingForm({ formRef, form, setForm, onCancel, onSaved }: HoldingFormProps) {
   const uid = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -395,14 +394,14 @@ function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: Holdin
 
   return (
     <Card as="section" aria-labelledby={fid("h")}>
-      <CardHeader id={fid("h")} title={mode === "add" ? "Add a holding" : `Edit ${form.instrument_id}`} />
+      <CardHeader id={fid("h")} title={`Edit ${form.instrument_id}`} />
       <form ref={formRef} className="form" onSubmit={submit} noValidate>
         <div className="form-grid">
           <div className="field">
             <label htmlFor={fid("id")}>Instrument ID</label>
-            <input id={fid("id")} value={form.instrument_id} onChange={set("instrument_id")} disabled={mode === "edit"} autoComplete="off" spellCheck={false} required aria-describedby={fid("idh")} />
+            <input id={fid("id")} value={form.instrument_id} onChange={set("instrument_id")} disabled autoComplete="off" spellCheck={false} required aria-describedby={fid("idh")} />
             <span id={fid("idh")} className="help">
-              {mode === "edit" ? "The ID cannot change." : "Your own short key, for example VWCE or OTP-B."}
+              The ID cannot change.
             </span>
           </div>
           <div className="field">
@@ -453,7 +452,7 @@ function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: Holdin
         <div className="btn-row">
           <button type="submit" className="btn" disabled={busy}>
             {busy && <span className="spinner" aria-hidden="true" />}
-            {busy ? "Saving…" : mode === "add" ? "Add holding" : "Save changes"}
+            {busy ? "Saving…" : "Save changes"}
           </button>
           <button type="button" className="btn ghost" onClick={onCancel} disabled={busy}>
             Cancel

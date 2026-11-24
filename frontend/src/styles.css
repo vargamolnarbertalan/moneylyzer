@@ -208,6 +208,13 @@ code {
   color: var(--muted);
   flex: none;
 }
+/* While the column widens from the rail, the brand gives way (clipped) so the toggle just clicked
+   stays in view instead of being pushed past the edge. */
+.side-head .brand {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
 .side-toggle:hover:not(:disabled) {
   color: var(--text);
 }

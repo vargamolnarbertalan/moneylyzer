@@ -36,6 +36,10 @@ ROOT = Path(__file__).resolve().parents[1]
 STATIC_DIR = Path(os.environ.get("LIA_STATIC_DIR") or ROOT / "frontend" / "dist")
 COOKIE_SECURE = os.environ.get("LIA_COOKIE_SECURE") == "1"
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+# Request bodies: JSON is small (the largest is a 20 000-character persona); CSV uploads are capped at
+# MAX_UPLOAD_BYTES plus multipart overhead. Checked before the body is parsed or spooled to /tmp.
+MAX_JSON_BODY = 1024 * 1024
+MAX_MULTIPART_BODY = MAX_UPLOAD_BYTES + 1024 * 1024
 DEFAULT_DONATE_URL = "https://revolut.me/vargamolnarb"
 
 
@@ -53,6 +57,63 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Moneylyzer", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+class BodyLimit:
+    """Refuses oversized request bodies with 413 before anything reads them: by Content-Length when
+    the client sends one, and by counting the bytes of a chunked body as it streams in."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        ctype = headers.get(b"content-type", b"").decode("latin-1").lower()
+        limit = MAX_MULTIPART_BODY if ctype.startswith("multipart/") else MAX_JSON_BODY
+        declared = headers.get(b"content-length")
+        if declared is not None:
+            try:
+                too_big = int(declared) > limit
+            except ValueError:
+                too_big = True
+            if too_big:
+                return await self._refuse(send)
+        seen = 0
+        refused = False
+
+        async def counted():
+            # A chunked body is counted as it arrives. Past the limit the 413 goes out at once and the
+            # app is told the client left (FastAPI would turn an exception here into its own 400).
+            nonlocal seen, refused
+            if refused:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                seen += len(message.get("body", b""))
+                if seen > limit:
+                    refused = True
+                    await self._refuse(send)
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message):
+            if not refused:  # after a refusal nothing the app answers may reach the client
+                await send(message)
+
+        await self.app(scope, counted, guarded_send)
+
+    @staticmethod
+    async def _refuse(send):
+        body = b'{"detail":"Request body too large."}'
+        await send({"type": "http.response.start", "status": 413,
+                    "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())]})
+        await send({"type": "http.response.body", "body": body})
+
+
+
+app.add_middleware(BodyLimit)
 
 
 @app.middleware("http")

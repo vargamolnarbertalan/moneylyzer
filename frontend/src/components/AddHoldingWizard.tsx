@@ -320,6 +320,7 @@ function WhatStep({ d, setD, taken, savedHolding }: { d: Draft; setD: (f: (x: Dr
   const uid = useId();
   const [q, setQ] = useState("");
   const [results, setResults] = useState<LookupResult[] | null>(null);
+  const [searchedFor, setSearchedFor] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [quote, setQuote] = useState<QuotePreview | null>(null);
@@ -335,12 +336,15 @@ function WhatStep({ d, setD, taken, savedHolding }: { d: Draft; setD: (f: (x: Dr
       return;
     }
     let alive = true;
+    // Busy from the keystroke on (the debounce included) until the answer: one steady spinner and one
+    // "Searching" for screen readers while typing, instead of flipping on every key.
+    setSearching(true);
     const t = window.setTimeout(async () => {
-      setSearching(true);
       try {
         const r = await endpoints.lookup(text);
         if (alive) {
           setResults(r);
+          setSearchedFor(text);
           setSearchError(null);
         }
       } catch (err) {
@@ -352,7 +356,6 @@ function WhatStep({ d, setD, taken, savedHolding }: { d: Draft; setD: (f: (x: Dr
     return () => {
       alive = false;
       window.clearTimeout(t);
-      setSearching(false);
     };
   }, [q]);
 
@@ -402,7 +405,7 @@ function WhatStep({ d, setD, taken, savedHolding }: { d: Draft; setD: (f: (x: Dr
             {searching ? "Searching" : results ? `${results.length} ${results.length === 1 ? "match" : "matches"}` : ""}
           </p>
           {searchError && <Alert tone="warn">{searchError} You can still enter it manually.</Alert>}
-          {results && !searching && results.length === 0 && <p className="sub">No match for “{q.trim()}”. Enter it manually below.</p>}
+          {results && !searching && results.length === 0 && <p className="sub">No match for “{searchedFor}”. Enter it manually below.</p>}
           {results && results.length > 0 && (
             <ul className="wiz-list" aria-label="Matches">
               {results.map((r) => (
