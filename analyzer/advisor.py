@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import logging
 import math
+import re
 import uuid
 from datetime import datetime, timezone
 
@@ -24,6 +26,11 @@ from analyzer.persona import DEFAULT_PERSONA, compose_system_prompt, normalize_p
 BUILTIN_ID = "claude-login"
 MAX_HISTORY_TURNS = 12
 MAX_QUESTION_CHARS = 8000
+CONVERSATION_KEEP_DAYS = 90
+MAX_CONVERSATIONS = 100
+MAX_SAVED_MESSAGES = 200
+CONVERSATION_ID_RE = re.compile(r"[A-Za-z0-9_-]{8,40}")
+log = logging.getLogger("lia")
 
 
 def init_tables() -> None:
@@ -46,6 +53,18 @@ def init_tables() -> None:
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
+            -- Saved AI analyst conversations: the questions and answers (with model, effort, sources and the
+            -- "what was shared" summary), never the portfolio context sent with them. Deleted after
+            -- CONVERSATION_KEEP_DAYS without a new answer; at most MAX_CONVERSATIONS are kept.
+            CREATE TABLE IF NOT EXISTS ai_conversations (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                provider_id TEXT,
+                model TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                messages TEXT NOT NULL DEFAULT '[]'
+            );
             """
         )
         # The subscription login is the first-class route and always exists.
@@ -61,6 +80,7 @@ def init_tables() -> None:
             conn.execute("INSERT INTO ai_settings(key, value) VALUES ('claude_login_effort_default', '1')")
         if conn.execute("SELECT count(*) FROM ai_providers WHERE is_default = 1").fetchone()[0] == 0:
             conn.execute("UPDATE ai_providers SET is_default = 1 WHERE id = ?", (BUILTIN_ID,))
+    purge_conversations()  # at every start: retention holds even if the AI analyst is never opened
 
 
 # ---------------------------------------------------------------- providers
@@ -289,8 +309,9 @@ def render_context(ctx: dict) -> str:
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
         instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None,
-        effort: str | None = None) -> dict:
-    """`effort` overrides the model's saved effort for this question only (chosen in the chat; never saved)."""
+        effort: str | None = None, conversation_id: str | None = None, turn_id: str | None = None) -> dict:
+    """`effort` overrides the model's saved effort for this question only (chosen in the chat; never saved).
+    With `conversation_id` the question and its answer are saved to that conversation once answered."""
     question = (question or "").strip()
     if not question:
         raise ValueError("Ask a question first.")
@@ -320,5 +341,109 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
     user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}])
-    return {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind},
-            "effort": applied_effort(provider), "shared": shared}
+    answer = {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind},
+              "effort": applied_effort(provider), "shared": shared}
+    if conversation_id:
+        try:
+            save_turn(conversation_id, provider.id, question, answer, instrument_id, now=now, turn_id=turn_id)
+        except Exception as exc:  # a failed save must not cost the answer
+            log.warning("could not save the AI conversation: %s", exc)
+    return answer
+
+
+# ---------------------------------------------------------------- saved conversations
+def _stamp(now: datetime | None = None) -> str:
+    return (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M:%S")  # sqlite datetime() format, UTC
+
+
+def _purge(conn, now: datetime | None = None) -> None:
+    """Expired (no answer for CONVERSATION_KEEP_DAYS) and over-the-cap conversations go."""
+    cutoff = ((now or datetime.now(timezone.utc)) - pd.Timedelta(days=CONVERSATION_KEEP_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+    conn.execute("DELETE FROM ai_conversations WHERE updated_at < ?", (cutoff,))
+    conn.execute("DELETE FROM ai_conversations WHERE id NOT IN "
+                 "(SELECT id FROM ai_conversations ORDER BY updated_at DESC, created_at DESC LIMIT ?)", (MAX_CONVERSATIONS,))
+
+
+def _connect_for_deletes(conn) -> None:
+    # Freed pages are overwritten with zeros, so a deleted conversation's text is not left in the file
+    # (and so not in a later backup download, which copies the file page by page).
+    conn.execute("PRAGMA secure_delete = ON")
+
+
+def purge_conversations(now: datetime | None = None) -> None:
+    """Run at startup and before a backup, so retention holds even when nobody uses the AI analyst."""
+    with db.connect() as conn:
+        _connect_for_deletes(conn)
+        _purge(conn, now)
+
+
+def save_turn(conversation_id: str, provider_id: str, question: str, answer: dict, instrument_id: str | None = None,
+              now: datetime | None = None, turn_id: str | None = None) -> None:
+    """Append one answered question to a saved conversation (created on its first answer).
+
+    `turn_id` is the browser's id for the question: a retried question (the first answer may have been
+    saved after the browser gave up waiting) replaces its earlier answer instead of being added twice.
+    """
+    if not CONVERSATION_ID_RE.fullmatch(conversation_id or "") or (turn_id and not CONVERSATION_ID_RE.fullmatch(turn_id)):
+        raise ValueError("Bad conversation id.")
+    stamp = _stamp(now)
+    meta = {k: answer.get(k) for k in ("provider", "model", "effort", "sources", "shared")}
+    reply = {"id": uuid.uuid4().hex[:12], "role": "assistant", "content": answer.get("text", ""), "meta": meta}
+    with db.connect() as conn:
+        _connect_for_deletes(conn)
+        conn.execute("BEGIN IMMEDIATE")  # read-append-write as one step: two tabs saving at once both keep their turn
+        _purge(conn, now)  # an expired conversation is gone before it could be continued
+        row = conn.execute("SELECT messages FROM ai_conversations WHERE id = ?", (conversation_id,)).fetchone()
+        messages = json.loads(row["messages"]) if row else []
+        asked = next((i for i, m in enumerate(messages) if turn_id and m.get("role") == "user" and m.get("turn") == turn_id), None)
+        if asked is not None:
+            if asked + 1 < len(messages) and messages[asked + 1].get("role") == "assistant":
+                messages[asked + 1] = reply
+            else:
+                messages.insert(asked + 1, reply)
+        else:
+            user = {"id": uuid.uuid4().hex[:12], "role": "user", "content": question}
+            if turn_id:
+                user["turn"] = turn_id
+            if instrument_id:
+                user["holding"] = instrument_id
+            messages += [user, reply]
+        payload = json.dumps(messages[-MAX_SAVED_MESSAGES:])  # ASCII escapes: a lone surrogate cannot fail the save
+        conn.execute(
+            "INSERT INTO ai_conversations(id, title, provider_id, model, created_at, updated_at, messages) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET provider_id = excluded.provider_id, "
+            "model = excluded.model, updated_at = excluded.updated_at, messages = excluded.messages",
+            (conversation_id, " ".join(question.split())[:80], provider_id, answer.get("model"), stamp, stamp, payload))
+        _purge(conn, now)  # the cap counts this one too
+
+
+def list_conversations(now: datetime | None = None) -> list[dict]:
+    """Newest first, without their messages. `model` is the one that last answered there."""
+    with db.connect() as conn:
+        _connect_for_deletes(conn)
+        _purge(conn, now)
+        rows = conn.execute(
+            "SELECT c.id, c.title, c.provider_id, c.model, c.created_at, c.updated_at, "
+            "json_array_length(c.messages) AS count, p.name AS provider_name FROM ai_conversations c "
+            "LEFT JOIN ai_providers p ON p.id = c.provider_id ORDER BY c.updated_at DESC, c.created_at DESC").fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_conversation(conversation_id: str, now: datetime | None = None) -> dict:
+    with db.connect() as conn:
+        _connect_for_deletes(conn)
+        _purge(conn, now)
+        row = conn.execute("SELECT id, title, provider_id, updated_at, messages FROM ai_conversations WHERE id = ?",
+                           (conversation_id,)).fetchone()
+    if row is None:
+        raise KeyError("No such conversation (it may have been deleted).")
+    return {**dict(row), "messages": json.loads(row["messages"])}
+
+
+def delete_conversation(conversation_id: str | None = None) -> int:
+    """Delete one conversation, or all of them when no id is given. Returns how many went."""
+    with db.connect() as conn:
+        _connect_for_deletes(conn)
+        if conversation_id is None:
+            return conn.execute("DELETE FROM ai_conversations").rowcount
+        return conn.execute("DELETE FROM ai_conversations WHERE id = ?", (conversation_id,)).rowcount

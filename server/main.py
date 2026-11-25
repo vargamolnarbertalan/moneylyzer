@@ -16,6 +16,7 @@ from typing import Annotated, Literal
 
 import pandas as pd
 from fastapi import Body, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
+from fastapi import Path as PathParam
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
@@ -628,6 +629,7 @@ def template(kind: Literal["holdings", "lots", "prices"], user: str = Depends(au
 
 @app.get("/api/backup")
 def backup(user: str = Depends(auth.require_user)):
+    advisor.purge_conversations()  # expired AI conversations never reach a backup
     return Response(db.backup_bytes(), media_type="application/x-sqlite3",
                     headers={"Content-Disposition": 'attachment; filename="investment_analyzer_backup.sqlite3"'})
 
@@ -710,6 +712,10 @@ class AskBody(BaseModel):
     expected_level: Literal["relative", "full"] | None = None
     # this question only (chosen in the chat); the model's saved effort when omitted
     effort: Literal["default", "low", "medium", "high", "xhigh", "max"] | None = None
+    # the saved conversation this question and its answer are added to (made by the browser)
+    conversation_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,40}$")
+    # the browser's id for this question: a retry replaces the saved answer instead of adding it twice
+    turn_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,40}$")
 
 
 @app.get("/api/ai/presets")
@@ -828,7 +834,8 @@ async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
         raise HTTPException(404, "No such holding.")
     try:
         result = await asyncio.to_thread(advisor.ask, body.provider_id, body.question, body.history, snapshot,
-                                         body.instrument_id, expected_level=body.expected_level, effort=body.effort)
+                                         body.instrument_id, expected_level=body.expected_level, effort=body.effort,
+                                         conversation_id=body.conversation_id, turn_id=body.turn_id)
     except advisor.LevelChanged as exc:
         raise HTTPException(409, str(exc)) from None
     except KeyError as exc:
@@ -836,6 +843,35 @@ async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
     except (ValueError, llm.LLMError) as exc:
         raise HTTPException(502 if isinstance(exc, llm.LLMError) else 400, str(exc)) from None
     return jsonable(result)
+
+
+# Saved conversations: questions and answers kept in this server's database for CONVERSATION_KEEP_DAYS.
+CONVERSATION_ID = PathParam(pattern=r"^[A-Za-z0-9_-]{8,40}$")
+
+
+@app.get("/api/advisor/conversations")
+def advisor_conversations(user: str = Depends(auth.require_user)):
+    return advisor.list_conversations()
+
+
+@app.get("/api/advisor/conversations/{conversation_id}")
+def advisor_conversation(conversation_id: str = CONVERSATION_ID, user: str = Depends(auth.require_user)):
+    try:
+        return advisor.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from None
+
+
+@app.delete("/api/advisor/conversations/{conversation_id}")
+def advisor_conversation_delete(conversation_id: str = CONVERSATION_ID, user: str = Depends(auth.require_user)):
+    if not advisor.delete_conversation(conversation_id):
+        raise HTTPException(404, "No such conversation (it may have been deleted).")
+    return {"ok": True}
+
+
+@app.delete("/api/advisor/conversations")
+def advisor_conversations_delete_all(user: str = Depends(auth.require_user)):
+    return {"deleted": advisor.delete_conversation(None)}
 
 
 @app.get("/api/research")

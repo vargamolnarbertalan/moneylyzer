@@ -1,5 +1,5 @@
 import { useId, useState, type FormEvent } from "react";
-import { QUICK_PROMPTS, clearChat, loadChat, queueQuestion, saveChat, type Chat } from "../advisor";
+import { QUICK_PROMPTS, clearChat, freshChat, loadChat, queueQuestion, saveChat, type Chat } from "../advisor";
 import { RELATIVE_ITEMS, endpoints } from "../api";
 import { ShieldCheck, Sparkles } from "lucide-react";
 import { useResource } from "../hooks";
@@ -56,7 +56,7 @@ export function AdvisorCard({ className }: { className?: string }) {
           side="bottom"
           onModel={(v) => {
             clearChat(); // another model starts a new conversation, as on the AI analyst page
-            setChat({ providerId: v, messages: [] });
+            setChat(freshChat(v));
           }}
           onEffort={(v) => setChat(withEffort(chat, selected, v))}
         />
