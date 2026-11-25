@@ -645,7 +645,9 @@ async def claude_status(user: str = Depends(auth.require_user)):
 @app.post("/api/claude/login")
 async def claude_login_start(user: str = Depends(auth.require_user)):
     try:
-        return {"url": await asyncio.to_thread(claude_login.start)}
+        url = await asyncio.to_thread(claude_login.start)
+        # No URL yet: Claude Code is downloading in the background; the UI polls /api/claude/status.
+        return {"url": url} if url else {"installing": True}
     except (claude_login.LoginError, ImportError) as exc:
         raise HTTPException(400, str(exc)) from None
 

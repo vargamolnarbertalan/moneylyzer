@@ -29,19 +29,13 @@ class LoginError(RuntimeError):
 
 
 class _Session:
-    def __init__(self) -> None:
+    def __init__(self, cli: str) -> None:
         try:
             import pty  # Linux/macOS only; imported here so the module loads on Windows for tests
         except ImportError:
             raise LoginError("Connecting Claude from the browser works in the Docker image (Linux). "
                              "On Windows, sign in once with `claude` in a terminal instead.") from None
 
-        cli = find_claude_cli()
-        if cli is None:
-            try:
-                cli = claude_install.install()  # first use: ~130 MB download, checksum-verified
-            except Exception as exc:
-                raise LoginError(f"Could not install Claude Code: {exc}") from None
         env = cli_environment()
         env["BROWSER"] = "true"  # no browser in the container; the URL is shown in the dashboard instead
         try:
@@ -98,15 +92,30 @@ _lock = threading.Lock()
 _session: _Session | None = None
 
 
-def start() -> str:
-    """Begin a login and return the authorize URL to open."""
+def start() -> str | None:
+    """Begin a login and return the authorize URL to open.
+
+    None means Claude Code is not installed yet: its download has started in the background
+    (status() reports the progress) and the caller asks again once it is installed.
+    """
     global _session
+    if find_claude_cli() is None:
+        blocker = claude_install.install_blocker()
+        if blocker:
+            raise LoginError(blocker)
+        claude_install.start_background(retry=True)
+        return None
+    claude_install.update_if_needed(retry=True)  # a click on Connect also retries a failed update at once
     with _lock:
         if _session is not None and _session.alive() and _session.url():
             return _session.url()
         if _session is not None:
             _session.close()
-        _session = _Session()
+        # Looked up again under the lock: waiting here, an update may have replaced the binary found above.
+        cli = find_claude_cli()
+        if cli is None:
+            raise LoginError("Claude Code is being updated. Try again in a moment.")
+        _session = _Session(cli)
         deadline = time.time() + 20
         while time.time() < deadline:
             if _session.url():
@@ -147,21 +156,25 @@ def submit(code: str) -> dict:
 
 def status() -> dict:
     """`claude auth status --json`, reduced to what the UI needs (no tokens)."""
+    # Progress first: read after the lookup, a download finishing in between would look like one that stopped.
+    download = claude_install.progress()
     cli = find_claude_cli()
     if cli is None:
         # Not downloaded yet is the normal first state in Docker: Connect installs it, so it still counts as available.
         blocker = claude_install.install_blocker()
         if blocker:
             return {"available": False, "installed": False, "loggedIn": False, "reason": blocker}
-        return {"available": True, "installed": False, "loggedIn": False,
+        return {"available": True, "installed": False, "loggedIn": False, "download": download,
                 "install_note": f"Connecting the first time downloads Claude Code {claude_install.VERSION} "
-                                "(about 130 MB, checksum-verified) from npm onto this server. It happens once."}
+                                "(about 130 MB, checksum-verified) from npm onto this server."}
     try:
         out = subprocess.run([cli, "auth", "status", "--json"], capture_output=True, text=True, timeout=20,
                              env=cli_environment())
         data = json.loads(out.stdout or "{}")
     except Exception as exc:
         return {"available": True, "installed": True, "loggedIn": False, "error": str(exc)}
+    if data.get("loggedIn"):
+        claude_install.update_if_needed()  # after a version bump; only while Claude is connected
     return {
         "available": True,
         "installed": True,

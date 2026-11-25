@@ -144,6 +144,8 @@ def _claude_code(p: Provider, system: str, messages: list[dict]) -> dict:
     cli = find_claude_cli()
     if cli is None:
         raise LLMError("Claude Code is not installed. Connect Claude in Settings or choose another model.")
+    from analyzer.claude_install import update_if_needed
+    update_if_needed()  # after a version bump this answer still uses the previous binary
     transcript = []
     for m in messages[:-1]:
         transcript.append(f"<{m['role']}_turn>\n{m['content']}\n</{m['role']}_turn>")

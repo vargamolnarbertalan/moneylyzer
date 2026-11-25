@@ -153,7 +153,9 @@ used for the screenshots). `requirements.lock` pins the exact versions the image
   library), OTP Alapkezelő and BAMOSZ, fetched by **your** installation for your personal use. Their terms
   apply to you; this project does not redistribute their data.
 - Connecting a Claude subscription downloads the **Claude Code** CLI from npm the first time (a pinned
-  version, checked against npm's integrity hash). Claude Code is Anthropic's software under Anthropic's
+  version, checked against npm's integrity hash), and again in the background after an app update pins a
+  different version, when you use Claude (signed in, or asking the Claude model). A failed download is
+  retried an hour later, then less often, at most daily. Claude Code is Anthropic's software under Anthropic's
   own terms, not MIT; it is not part of this repository or the image. AI providers' terms apply to your
   account with them.
 - Everything in this repository is MIT-licensed ([LICENSE](LICENSE)). The built web app bundles React and

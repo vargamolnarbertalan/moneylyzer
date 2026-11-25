@@ -2028,6 +2028,44 @@ input:-webkit-autofill {
 .steps > li > .btn {
   justify-self: start;
 }
+.claude-dl {
+  margin-top: 12px;
+  display: grid;
+  gap: 6px;
+  max-width: 420px;
+  font-variant-numeric: tabular-nums;
+}
+.claude-dl progress {
+  appearance: none;
+  width: 100%;
+  height: 8px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+.claude-dl progress::-webkit-progress-bar {
+  background: color-mix(in srgb, var(--muted) 22%, transparent);
+}
+.claude-dl progress::-webkit-progress-value {
+  background: var(--grad);
+  border-radius: 999px;
+}
+.claude-dl progress::-moz-progress-bar {
+  background: var(--grad);
+  border-radius: 999px;
+}
+/* Size not known yet: a dimmed gradient track, so it reads neither as 0% nor as done. */
+.claude-dl progress:indeterminate {
+  background: var(--grad);
+  opacity: 0.35;
+}
+.claude-dl progress:indeterminate::-webkit-progress-bar {
+  background: transparent;
+}
+.claude-dl progress:indeterminate::-moz-progress-bar {
+  background: transparent;
+}
 .steps > li::before {
   content: counter(step);
   width: 24px;
