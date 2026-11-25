@@ -1,9 +1,10 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Check, ChevronDown, Copy, Download, ExternalLink, History, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, ExternalLink, History, Paperclip, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { RecentConversations } from "../components/ai/RecentConversations";
 import { AI_ANSWER_NOTE } from "../legal";
 import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, conversationMarkdown, freshChat, historyBefore, loadChat, memoryStart, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
 import { copyText, downloadText } from "../clipboard";
+import { MAX_FILES, MAX_TOTAL_BYTES, addFiles, fileSize, type PendingFile } from "../attachments";
 import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type Provider } from "../api";
 import { effortPhrase } from "../effort";
 import { ModelMenu, chatModel, withEffort } from "../components/ai/ChatPickers";
@@ -36,6 +37,41 @@ export function AdvisorPage() {
   const [allPrompts, setAllPrompts] = useState(false);
   const [recent, setRecent] = useState(false);
   const recentBtn = useRef<HTMLButtonElement | null>(null);
+  // Files for the next question (sent with it only); the last question's files stay for "Try again".
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const filesRef = useRef<PendingFile[]>([]);
+  filesRef.current = files;
+  const lastFiles = useRef<{ turnId: string; files: PendingFile[] } | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  // One read at a time, each starting from the files the previous one left; Send waits while one runs,
+  // so a question never leaves without a file that was still being read.
+  const attachQueue = useRef<Promise<void>>(Promise.resolve());
+  const filesGeneration = useRef(0); // bumped by dropFiles: a read still running then lands nowhere
+  const readingRef = useRef(0);
+  const [reading, setReading] = useState(false);
+  const attach = (chosen: File[]) => {
+    if (!chosen.length) return;
+    readingRef.current += 1;
+    setReading(true);
+    const generation = filesGeneration.current;
+    attachQueue.current = attachQueue.current.then(async () => {
+      try {
+        if (generation !== filesGeneration.current) return; // chosen before a conversation switch: dropped
+        const start = filesRef.current;
+        const res = await addFiles(chosen, start);
+        if (generation !== filesGeneration.current) return; // the switch happened while reading
+        // onto the list as it is now: a chip removed during the read stays removed
+        const next = [...filesRef.current, ...res.files.slice(start.length)];
+        filesRef.current = next;
+        setFiles(next);
+        setFileError(res.error);
+      } finally {
+        readingRef.current -= 1;
+        setReading(readingRef.current > 0);
+      }
+    });
+  };
   const prompts = allPrompts ? QUICK_PROMPTS : QUICK_PROMPTS.slice(0, QUICK_PROMPTS_SHOWN);
   const hiddenPrompts = QUICK_PROMPTS.length - QUICK_PROMPTS_SHOWN;
 
@@ -69,7 +105,7 @@ export function AdvisorPage() {
   }, [chat.messages.length, waiting, failure]);
 
   const run = useCallback(
-    async (question: string, before: ChatMessage[], holding: string | null, turnId: string) => {
+    async (question: string, before: ChatMessage[], holding: string | null, turnId: string, sending: PendingFile[] = []) => {
       busy.current = true;
       setWaiting(true);
       setFailure(null);
@@ -85,8 +121,10 @@ export function AdvisorPage() {
         if (shown) body.effort = shown;
         body.conversation_id = started; // the server saves the answer there (Recent)
         body.turn_id = turnId; // a retry replaces the saved answer instead of adding the question twice
+        if (sending.length) body.attachments = sending.map((f) => ({ name: f.name, data: f.data }));
         if (holding) body.instrument_id = holding;
         const res = await endpoints.ask(body);
+        if (lastFiles.current?.turnId === turnId) lastFiles.current = null; // answered: no retry will need them
         if (chatRef.current.conversationId !== started) return; // another conversation is on screen now
         setChat((c) => ({
           ...c,
@@ -110,7 +148,7 @@ export function AdvisorPage() {
   const send = useCallback(
     (text: string, holding: string | null = holdingId) => {
       const question = text.trim().slice(0, MAX_QUESTION);
-      if (!question || busy.current) return;
+      if (!question || busy.current || readingRef.current > 0) return;
       if (orphanedRef.current) {
         // a reopened conversation whose model was removed is read-only: a new question starts a new one
         clearChat();
@@ -119,9 +157,15 @@ export function AdvisorPage() {
       }
       const before = chatRef.current.messages;
       const turnId = newId();
-      setChat((c) => ({ ...c, messages: [...c.messages, { id: turnId, role: "user", content: question }] }));
+      const sending = filesRef.current;
+      const attached = sending.length ? sending.map((f) => ({ name: f.name, size: f.size })) : undefined;
+      setChat((c) => ({ ...c, messages: [...c.messages, { id: turnId, role: "user", content: question, files: attached }] }));
       setDraft("");
-      void run(question, before, holding, turnId);
+      filesRef.current = [];
+      setFiles([]);
+      setFileError(null);
+      lastFiles.current = sending.length ? { turnId, files: sending } : null;
+      void run(question, before, holding, turnId, sending);
     },
     [run, holdingId],
   );
@@ -130,7 +174,8 @@ export function AdvisorPage() {
     const msgs = chatRef.current.messages;
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== "user" || busy.current) return;
-    void run(last.content, msgs.slice(0, -1), holdingId, last.id);
+    // "Try again" exists only while the failure is on screen, which a reload clears: the files are still in memory
+    void run(last.content, msgs.slice(0, -1), holdingId, last.id, lastFiles.current?.turnId === last.id ? lastFiles.current.files : []);
   };
 
   // A question handed over from the Overview card is sent as soon as the page opens.
@@ -152,8 +197,18 @@ export function AdvisorPage() {
     }
   };
 
+  // Pending files belong to the conversation they were chosen in: like the draft, they don't follow a switch.
+  const dropFiles = () => {
+    filesGeneration.current += 1;
+    filesRef.current = [];
+    setFiles([]);
+    setFileError(null);
+    lastFiles.current = null;
+  };
+
   const newConversation = () => {
     clearChat();
+    dropFiles();
     setChat((c) => freshChat(selected?.id ?? null, c.providerId === selected?.id ? (c.effort ?? null) : null));
     setFailure(null);
     setStale(false);
@@ -229,11 +284,12 @@ export function AdvisorPage() {
                 conversationId: c.id,
                 providerId: c.provider_id ?? null,
                 effort: null,
-                messages: c.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta })),
+                messages: c.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, files: m.files, meta: m.meta })),
               });
               setFailure(null);
               setStale(false);
               setRecent(false);
+              dropFiles();
               // its model removed: the message box is off, so focus goes to New conversation instead
               const readOnly = !!c.provider_id && list.length > 0 && !list.some((p) => p.id === c.provider_id);
               requestAnimationFrame(() => (readOnly ? newConvBtn.current : areaRef.current)?.focus());
@@ -250,7 +306,7 @@ export function AdvisorPage() {
 
         <div className="chips" role="group" aria-label="Quick questions">
           {prompts.map((q) => (
-            <button key={q.label} type="button" className="chip" onClick={() => send(q.question)} disabled={waiting}>
+            <button key={q.label} type="button" className="chip" onClick={() => send(q.question)} disabled={waiting || reading}>
               {q.label}
             </button>
           ))}
@@ -307,7 +363,23 @@ export function AdvisorPage() {
                   <span>The analyst no longer sees the messages above. Start a new conversation, or repeat what still matters.</span>
                 </div>
               )}
-              {m.role === "user" ? <div className="msg user"><p>{m.content}</p></div> : <Answer m={m} />}
+              {m.role === "user" ? (
+                <div className="msg user">
+                  <p>{m.content}</p>
+                  {m.files?.length ? (
+                    <ul className="file-chips sent" aria-label="Attached files">
+                      {m.files.map((f, i) => (
+                        <li key={`${f.name}-${i}`}>
+                          <Paperclip aria-hidden="true" />
+                          {f.name} · {fileSize(f.size)}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+              ) : (
+                <Answer m={m} />
+              )}
             </Fragment>
           ))}
           {waiting && (
@@ -332,7 +404,52 @@ export function AdvisorPage() {
           <div ref={endRef} />
         </div>
 
-        <form className="composer" onSubmit={submit}>
+        <form
+          className="composer"
+          onSubmit={submit}
+          onDragOver={(e) => {
+            if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+          }}
+          onDrop={(e) => {
+            if (!e.dataTransfer.files.length) return;
+            e.preventDefault(); // even when busy: otherwise the browser leaves the app to open the file
+            if (!waiting && !orphaned) attach([...e.dataTransfer.files]);
+          }}
+        >
+          {files.length > 0 && (
+            <div className="composer-files">
+              <ul className="file-chips" aria-label="Files for this question">
+                {files.map((f, i) => (
+                  <li key={f.id}>
+                    <Paperclip aria-hidden="true" />
+                    {f.name} · {fileSize(f.size)}
+                    <button
+                      type="button"
+                      className="chip-x"
+                      aria-label={`Remove file ${i + 1}, ${f.name}`} /* two pasted screenshots are both "image.png" */
+                      onClick={() => {
+                        filesRef.current = filesRef.current.filter((x) => x.id !== f.id);
+                        setFiles(filesRef.current);
+                        setFileError(null);
+                        areaRef.current?.focus();
+                      }}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="help">{selected ? `They go to ${selected.name} with this question only. ` : ""}Moneylyzer keeps only their names and sizes.</p>
+            </div>
+          )}
+          <p className="sr-only" role="status">
+            {reading ? "Reading the files…" : files.length ? `${files.length} ${files.length === 1 ? "file" : "files"} attached` : ""}
+          </p>
+          {fileError && (
+            <p className="field-err" role="alert">
+              {fileError}
+            </p>
+          )}
           <label className="sr-only" htmlFor={textareaId}>
             Ask the AI analyst
           </label>
@@ -346,25 +463,62 @@ export function AdvisorPage() {
             disabled={waiting || orphaned}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKey}
+            onPaste={(e) => {
+              // a pasted screenshot or file becomes an attachment; pasted text stays text, even when the
+              // clipboard also carries a picture of it (cells copied from Excel or Word bring one along).
+              // A copied file that isn't a picture is attached even if its name came along as text.
+              const pasted = [...e.clipboardData.files];
+              if (pasted.length && (!e.clipboardData.types.includes("text/plain") || pasted.some((f) => !f.type.startsWith("image/")))) {
+                e.preventDefault();
+                attach(pasted);
+              }
+            }}
           />
           {/* Model and effort live in the message box, where the question is written (as in Claude's own app). */}
           <div className="composer-bar">
-            <ModelMenu
-              chat={chat}
-              list={list}
-              loading={providers.loading}
-              disabled={waiting || orphaned /* read-only: its model was removed; New conversation picks another */}
-              onModel={(v) => {
-                // another model starts a new conversation: earlier answers stay with the model (and the
-                // sharing level) they were written for
-                clearChat();
-                setChat(freshChat(v));
-                setFailure(null);
-                setStale(false);
-              }}
-              onEffort={(v) => setChat((c) => withEffort(c, selected, v))}
-            />
-            <button type="submit" className="btn send-btn" disabled={waiting || !draft.trim() || !selected || orphaned}>
+            <div className="composer-tools">
+              <button
+                type="button"
+                className="icon-btn"
+                aria-label={`Attach files (up to ${MAX_FILES}, ${fileSize(MAX_TOTAL_BYTES)} in total)`}
+                title="Attach files: text, CSV, Excel, Word, PDF or images"
+                onClick={() => {
+                  // stays enabled when full (disabling it would drop keyboard focus): says why instead
+                  if (filesRef.current.length >= MAX_FILES) setFileError(`At most ${MAX_FILES} files per question: remove one to attach another.`);
+                  else fileInput.current?.click();
+                }}
+                disabled={waiting || orphaned}
+              >
+                <Paperclip />
+              </button>
+              <input
+                ref={fileInput}
+                type="file"
+                multiple
+                hidden
+                onChange={(e) => {
+                  attach([...(e.target.files ?? [])]);
+                  e.target.value = ""; // the same file can be chosen again after removing it
+                }}
+              />
+              <ModelMenu
+                chat={chat}
+                list={list}
+                loading={providers.loading}
+                disabled={waiting || orphaned /* read-only: its model was removed; New conversation picks another */}
+                onModel={(v) => {
+                  // another model starts a new conversation: earlier answers stay with the model (and the
+                  // sharing level) they were written for
+                  clearChat();
+                  dropFiles();
+                  setChat(freshChat(v));
+                  setFailure(null);
+                  setStale(false);
+                }}
+                onEffort={(v) => setChat((c) => withEffort(c, selected, v))}
+              />
+            </div>
+            <button type="submit" className="btn send-btn" disabled={waiting || reading || !draft.trim() || !selected || orphaned}>
               {waiting && <span className="spinner" aria-hidden="true" />}
               {waiting ? "Waiting…" : "Send"}
             </button>
@@ -442,6 +596,7 @@ function Answer({ m }: { m: ChatMessage }) {
               {shared.holdings} {shared.holdings === 1 ? "holding" : "holdings"} · {shared.benchmarks} market {shared.benchmarks === 1 ? "benchmark" : "benchmarks"} · {shared.news_items} news {shared.news_items === 1 ? "item" : "items"}
             </li>
             {(shared.notes ?? 0) > 0 && <li>{shared.notes === 1 ? "1 holding note" : `${shared.notes} holding notes`}</li>}
+            {shared.files?.length ? <li>Attached: {shared.files.map((f) => f.name).join(", ")}</li> : null}
             <li>Web research: {shared.web_research ? "on" : "off"}</li>
           </ul>
         </details>

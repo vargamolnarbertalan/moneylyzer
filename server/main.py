@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from analyzer import advisor, db, llm, prefs, research
+from analyzer import advisor, attachments, db, llm, prefs, research
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
 from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
 from analyzer.portfolio import RateBook, value_history
@@ -41,7 +41,8 @@ MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 # JSON; an AI question carries up to 24 earlier messages, whose answers can be long; CSV uploads are
 # MAX_UPLOAD_BYTES plus multipart overhead.
 MAX_JSON_BODY = 1024 * 1024
-MAX_ASK_BODY = 4 * 1024 * 1024
+# the 4 MB the history always had, plus up to 6 MB of attachments base64-encoded (8 MB) and JSON overhead
+MAX_ASK_BODY = 13 * 1024 * 1024
 MAX_MULTIPART_BODY = MAX_UPLOAD_BYTES + 1024 * 1024
 DEFAULT_DONATE_URL = "https://revolut.me/vargamolnarb"
 
@@ -703,6 +704,11 @@ class SettingsBody(BaseModel):
     rules_expected: list[Annotated[str, Field(max_length=MAX_RULE_CHARS)]] | None = Field(default=None, max_length=MAX_RULES)
 
 
+class AttachmentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    data: str = Field(max_length=9 * 1024 * 1024)  # base64; "" is an empty file (it becomes an empty text part)
+
+
 class AskBody(BaseModel):
     question: str = Field(min_length=1, max_length=advisor.MAX_QUESTION_CHARS)
     history: list[dict] = Field(default_factory=list, max_length=40)
@@ -716,6 +722,8 @@ class AskBody(BaseModel):
     conversation_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,40}$")
     # the browser's id for this question: a retry replaces the saved answer instead of adding it twice
     turn_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,40}$")
+    # files for this question only (base64); sniffed and converted per model in analyzer.attachments
+    attachments: list[AttachmentIn] = Field(default_factory=list, max_length=attachments.MAX_FILES)
 
 
 @app.get("/api/ai/presets")
@@ -833,9 +841,13 @@ async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
     if body.instrument_id and not any(r["id"] == body.instrument_id for r in snapshot.get("rows", [])):
         raise HTTPException(404, "No such holding.")
     try:
+        files = attachments.decode([a.model_dump() for a in body.attachments])
+    except attachments.AttachmentError as exc:
+        raise HTTPException(400, str(exc)) from None
+    try:
         result = await asyncio.to_thread(advisor.ask, body.provider_id, body.question, body.history, snapshot,
                                          body.instrument_id, expected_level=body.expected_level, effort=body.effort,
-                                         conversation_id=body.conversation_id, turn_id=body.turn_id)
+                                         conversation_id=body.conversation_id, turn_id=body.turn_id, files=files)
     except advisor.LevelChanged as exc:
         raise HTTPException(409, str(exc)) from None
     except KeyError as exc:

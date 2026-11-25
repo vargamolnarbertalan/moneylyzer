@@ -327,6 +327,13 @@ export interface AdvisorShared {
   web_research: boolean;
   /** Holdings whose notes were sent (full detail only). */
   notes?: number;
+  /** Files attached to this question (names and sizes; they went to this model only). */
+  files?: AttachedFile[];
+}
+
+export interface AttachedFile {
+  name: string;
+  size: number;
 }
 
 export interface AdvisorSource {
@@ -361,7 +368,7 @@ export interface SavedConversation {
   title: string;
   provider_id: Nullable<string>;
   updated_at: string;
-  messages: { id: string; role: "user" | "assistant"; content: string; meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared"> }[];
+  messages: { id: string; role: "user" | "assistant"; content: string; files?: AttachedFile[]; meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared"> }[];
 }
 
 export interface MarketItem {
@@ -547,7 +554,7 @@ export const endpoints = {
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
   saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
   /** expected_level: the level the conversation's answers were written at (409 if the model's level changed). */
-  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel; effort?: Effort; conversation_id?: string; turn_id?: string }) =>
+  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel; effort?: Effort; conversation_id?: string; turn_id?: string; attachments?: { name: string; data: string }[] }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
   conversations: () => api.get<ConversationSummary[]>("/api/advisor/conversations"),
