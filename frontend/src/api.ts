@@ -243,7 +243,8 @@ export type DataLevel = "relative" | "full";
 /** What a model sees at the relative level (the one shared text, like FULL_DETAIL_ITEMS below). */
 export const RELATIVE_ITEMS = "weights, % changes and whether a holding is sold out";
 export const FULL_DETAIL_ITEMS ="amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes";
-export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+/** "default" sends no effort: the model's own default. */
+export type Effort = "default" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {
   id: string;
@@ -510,6 +511,9 @@ export const endpoints = {
   setDataLevel: (id: string, data_level: DataLevel, confirm_full: boolean) =>
     api.post<{ ok: boolean; data_level: DataLevel }>(`/api/ai/providers/${encodeURIComponent(id)}/data-level`, { data_level, confirm_full }),
   saveProvider: (body: ProviderInput) => api.post<{ id: string }>("/api/ai/providers", body),
+  /** The provider's own model list (Claude API or OpenAI-compatible); a saved key is used when none is typed. */
+  listModels: (body: { kind: "anthropic" | "openai_compat"; base_url: string; api_key?: string; provider_id?: string }) =>
+    api.post<{ models: string[] }>("/api/ai/models", body),
   deleteProvider: (id: string) => api.del<{ ok: boolean }>(`/api/ai/providers/${encodeURIComponent(id)}`),
   makeDefaultProvider: (id: string) => api.post<{ ok: boolean }>(`/api/ai/providers/${encodeURIComponent(id)}/default`),
   testProvider: (id: string) => api.post<{ ok: boolean; model: string; reply: string }>(`/api/ai/providers/${encodeURIComponent(id)}/test`),

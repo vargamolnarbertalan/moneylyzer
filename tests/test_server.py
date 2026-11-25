@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 import json
 
-from analyzer import db
+from analyzer import db, llm
 from server import auth, live
 
 H = {"X-Requested-With": "lia"}
@@ -71,6 +71,21 @@ class ApiTests(unittest.TestCase):
         code = auth._setup_code
         r = self.client.post("/api/auth/setup", json={"username": "owner", "password": "correct horse 1", "code": code}, headers=H)
         self.assertEqual(r.status_code, 200, r.text)
+
+    def test_model_list_uses_typed_or_saved_key(self):
+        self.setup_account()
+        pid = self.client.post("/api/ai/providers", headers=H, json={
+            "name": "API", "kind": "anthropic", "model": "claude-opus-5-5", "api_key": "sk-saved"}).json()["id"]
+        with mock.patch("server.main.llm.list_models", return_value=["claude-opus-5-5"]) as lm:
+            r = self.client.post("/api/ai/models", headers=H, json={"kind": "anthropic", "provider_id": pid})
+            self.assertEqual(r.json(), {"models": ["claude-opus-5-5"]})
+            self.assertEqual(lm.call_args.args, ("anthropic", "", "sk-saved"))
+            self.client.post("/api/ai/models", headers=H, json={"kind": "anthropic", "provider_id": pid, "api_key": "sk-typed"})
+            self.assertEqual(lm.call_args.args[2], "sk-typed")
+        with mock.patch("server.main.llm.list_models", side_effect=llm.LLMError("nope")):
+            self.assertEqual(self.client.post("/api/ai/models", headers=H, json={"kind": "openai_compat"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/ai/models", headers=H, json={"kind": "claude_code"}).status_code, 422)
+        self.assertEqual(self.client.post("/api/ai/models", json={"kind": "anthropic"}).status_code, 403)  # CSRF header
 
     def test_setup_needs_code_and_happens_once(self):
         self.assertTrue(self.client.get("/api/auth/state").json()["setup_required"])

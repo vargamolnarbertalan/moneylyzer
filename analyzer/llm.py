@@ -27,6 +27,8 @@ log = logging.getLogger("lia")
 from analyzer.ai import TIMEOUT_SECONDS, WORK_DIR, cli_environment, find_claude_cli, parse_cli_output
 
 KINDS = ("claude_code", "anthropic", "openai_compat")
+# "default" sends no effort: the model's own default (medium on current Claude models in Claude Code).
+EFFORTS = ("default", "low", "medium", "high", "xhigh", "max")
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@\-\[\]~]{0,127}")
 MAX_TOKENS = 16000
 
@@ -103,8 +105,8 @@ def validate(p: Provider) -> None:
         raise LLMError("Enter a model id (letters, digits and . _ : / @ - only).")
     if p.data_level not in ("relative", "full"):
         raise LLMError("data_level must be relative or full")
-    if p.effort not in ("low", "medium", "high", "xhigh", "max"):
-        raise LLMError("effort must be low, medium, high, xhigh or max")
+    if p.effort not in EFFORTS:
+        raise LLMError("effort must be default, low, medium, high, xhigh or max")
     if p.kind == "openai_compat":
         url = urllib.parse.urlparse(p.base_url)
         if url.scheme not in ("http", "https") or not url.hostname:
@@ -167,6 +169,8 @@ def _claude_code(p: Provider, system: str, messages: list[dict]) -> dict:
                "--disable-slash-commands", "--no-chrome", "--permission-prompts", "none"]
         if p.web_research:
             cmd += ["--allowedTools", "WebSearch", "WebFetch"]
+        if p.effort != "default":  # a level the model lacks runs at the nearest one below (Claude Code docs)
+            cmd += ["--effort", p.effort]
         done = subprocess.run(cmd, input=prompt, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=TIMEOUT_SECONDS, cwd=WORK_DIR, env=cli_environment())
     except subprocess.TimeoutExpired:
@@ -199,7 +203,7 @@ def _anthropic(p: Provider, system: str, messages: list[dict]) -> dict:
     params: dict = {"model": p.model, "max_tokens": MAX_TOKENS,
                     "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                     "messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
-    if p.model in EFFORT_MODELS:
+    if p.model in EFFORT_MODELS and p.effort != "default":
         params["output_config"] = {"effort": p.effort}
     if p.model in FALLBACK_MODELS:
         params["betas"] = ["server-side-fallback-2026-07-01"]
@@ -275,6 +279,59 @@ def _openai_compat(p: Provider, system: str, messages: list[dict]) -> dict:
     if not text:
         raise LLMError("The model returned no text.")
     return {"text": text, "model": data.get("model") or p.model, "sources": _links(text)}
+
+
+# ---------------------------------------------------------------- model lists
+MAX_LISTED_MODELS = 500
+
+
+def list_models(kind: str, base_url: str, key: str | None) -> list[str]:
+    """The provider's own model list, for the Model suggestions. Claude login has none (fixed aliases)."""
+    if kind == "anthropic":
+        import anthropic
+
+        if not key:
+            raise LLMError("Enter the API key first; the Claude API lists models only for a key.")
+        client = anthropic.Anthropic(api_key=key, base_url=base_url or None, timeout=15, max_retries=0)
+        try:
+            ids = [m.id for _, m in zip(range(MAX_LISTED_MODELS), client.models.list())]
+        except anthropic.AuthenticationError:
+            raise LLMError("The Claude API rejected the key.") from None
+        except anthropic.APIStatusError as exc:
+            raise LLMError(f"Claude API error {exc.status_code}: {exc.message}") from None
+        except anthropic.APIConnectionError:
+            raise LLMError("Could not reach the Claude API (network).") from None
+        return ids  # newest first, as the API returns them
+    if kind != "openai_compat":
+        raise LLMError("Claude login has no model list; use one of the names in the explainer.")
+    url = urllib.parse.urlparse(base_url)
+    if url.scheme not in ("http", "https") or not url.hostname:
+        raise LLMError("Enter the provider's base URL first, e.g. https://api.openai.com/v1")
+    headers = {"User-Agent": "moneylyzer", "Accept": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+    request = urllib.request.Request(base_url.rstrip("/") + "/models", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=15) as resp:
+            raw = resp.read(2_000_001)
+        if len(raw) > 2_000_000:
+            raise LLMError("The provider's model list is too large to show.")
+        data = json.loads(raw.decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        detail = _error_message(exc.read(20_000).decode("utf-8", "replace"))
+        if exc.code in (401, 403):
+            raise LLMError(f"The provider refused to list models without a valid API key ({exc.code}): {detail}") from None
+        raise LLMError(f"The provider did not list its models ({exc.code}): {detail}") from None
+    except urllib.error.URLError as exc:
+        raise LLMError(f"Could not reach {base_url}: {exc.reason}.") from None
+    except (TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise LLMError(f"Bad or slow response from {base_url}: {exc}") from None
+    items = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise LLMError("Unexpected response shape (expected a data list of models).")
+    ids = sorted({str(m["id"]) for m in items if isinstance(m, dict) and isinstance(m.get("id"), str)
+                  and MODEL_RE.fullmatch(m["id"])})
+    return ids[:MAX_LISTED_MODELS]
 
 
 def _error_message(raw: str) -> str:

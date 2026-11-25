@@ -674,9 +674,17 @@ class ProviderBody(BaseModel):
     base_url: str = Field(default="", max_length=300)
     data_level: Literal["relative", "full"] = "relative"  # ignored: set only via /data-level (full needs confirm)
     web_research: bool = False
-    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
+    effort: Literal["default", "low", "medium", "high", "xhigh", "max"] = "high"
     api_key: str | None = Field(default=None, max_length=500)
     clear_key: bool = False
+
+
+class ModelListBody(BaseModel):
+    kind: Literal["anthropic", "openai_compat"]
+    base_url: str = Field(default="", max_length=300)
+    api_key: str | None = Field(default=None, max_length=500)
+    # an existing model whose saved key is used when no key is typed
+    provider_id: str | None = Field(default=None, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class SettingsBody(BaseModel):
@@ -705,6 +713,17 @@ def ai_presets(user: str = Depends(auth.require_user)):
 @app.get("/api/ai/providers")
 def ai_providers(user: str = Depends(auth.require_user)):
     return advisor.list_providers()
+
+
+@app.post("/api/ai/models")
+def ai_models(body: ModelListBody, user: str = Depends(auth.require_user)):
+    """The provider's model list for the Model suggestions; asked for with a button, never automatically."""
+    from analyzer import secrets_store
+    key = (body.api_key or "").strip() or (secrets_store.get(f"provider:{body.provider_id}") if body.provider_id else None)
+    try:
+        return {"models": llm.list_models(body.kind, body.base_url.strip(), key)}
+    except llm.LLMError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @app.post("/api/ai/providers")
