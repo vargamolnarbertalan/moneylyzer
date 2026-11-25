@@ -394,6 +394,10 @@ class SaleTooLarge(ValueError):
         self.row = row
 
 
+class NoPurchases(SaleTooLarge):
+    """A sale on a holding that has no stored purchase: its units come from the holding record."""
+
+
 class LotInUse(ValueError):
     """A buy cannot be deleted while a later sale needs its units."""
 
@@ -472,13 +476,16 @@ def add_lots(lots: list[dict]) -> tuple[int, int]:
     Returns (added, skipped). A failure inserts nothing, so a retried import never half-duplicates.
     A sale larger than the units held on its date (FIFO replay of everything stored plus the new rows,
     checked after the duplicates are dropped) raises SaleTooLarge and inserts nothing.
+    The rows are stored by trade date, buys before sells on the same date, whatever order they were given in:
+    an export that lists the newest first (a sale above the buy it sells) imports the same as an oldest-first one.
     """
     added = skipped = 0
+    prepared = sorted(((index, _lot_values(lot)) for index, lot in enumerate(lots)),
+                      key=lambda p: (p[1][1], p[1][8] == "sell"))  # stable: ties keep the file's order
     with connect() as conn:
         new_ids: dict[int, int] = {}      # lot_id of each inserted row -> its index in `lots`
         first_sale: dict[str, int] = {}   # instrument_id -> index of its first inserted sale
-        for index, lot in enumerate(lots):
-            values = _lot_values(lot)
+        for index, values in prepared:
             duplicate = conn.execute(
                 "SELECT 1 FROM lots WHERE instrument_id=? AND buy_date=? AND quantity=? AND unit_price=? "
                 "AND paid_amount IS ? AND paid_currency IS ? AND platform IS ? AND side=? LIMIT 1",
@@ -494,17 +501,25 @@ def add_lots(lots: list[dict]) -> tuple[int, int]:
             )
             new_ids[cursor.lastrowid] = index
             if values[8] == "sell":
-                first_sale.setdefault(values[0], index)
+                first_sale[values[0]] = min(index, first_sale.get(values[0], index))
             added += 1
         # Only a new sale can break the replay (an extra buy never does).
         for instrument_id, index in first_sale.items():
-            stored = conn.execute("SELECT lot_id, buy_date, side, quantity FROM lots WHERE instrument_id = ?",
-                                  (instrument_id,)).fetchall()
-            problem = fifo_shortfall([dict(r) for r in stored])
+            stored = [dict(r) for r in conn.execute("SELECT lot_id, buy_date, side, quantity FROM lots WHERE instrument_id = ?",
+                                                    (instrument_id,)).fetchall()]
+            if not any(r["side"] == "buy" for r in stored):
+                # a holding whose units come from its holding record: there is nothing to sell from yet
+                raise NoPurchases("This holding's units come from its holding record. "
+                                  "Record its purchases first, then the sale.", index)
+            problem = fifo_shortfall(stored)
             if problem is None:
                 continue
             if problem["lot"]["lot_id"] in new_ids:
                 raise SaleTooLarge(shortfall_message(problem), new_ids[problem["lot"]["lot_id"]])
+            # An older sale is starved: blame the last new sale (in FIFO order) dated before it.
+            causes = [r for r in stored if r["lot_id"] in new_ids and r["side"] == "sell" and r["buy_date"] < problem["date"]]
+            if causes:
+                index = new_ids[max(causes, key=lambda r: (r["buy_date"], r["lot_id"]))["lot_id"]]
             raise SaleTooLarge(f"That would leave your sale on {problem['date']} larger than the "
                                f"{units_text(problem['held'])} you would hold then.", index)
     return added, skipped

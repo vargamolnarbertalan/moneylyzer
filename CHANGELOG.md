@@ -6,7 +6,9 @@
 - A holding whose transactions net to zero units is "Closed": a badge in Holdings, no value or weight, left out of the allocation and the holding counts; its realized P/L still counts. The value-over-time curve subtracts sales from their date.
 - A sale larger than the units held on its date is refused (with the CSV line number on import), and a purchase that a later sale needs cannot be deleted before that sale.
 - Transactions CSV: an optional `side` column (`buy` or `sell`, empty means buy, so older files still work). Existing data is migrated automatically; every earlier row is a buy.
-- AI analyst: with full detail it sees each transaction's side and each holding's realized P/L; both detail levels see whether a holding is closed.
+- AI analyst: with full detail it sees each transaction's side and each holding's realized P/L; both detail levels see whether a holding is closed (sold out).
+- A holding whose units come only from its holding record (no transactions yet) cannot be sold from: the Sell option appears once a purchase is recorded. A CSV that lists the newest rows first, with a sale above the buy it sells, imports like an oldest-first one.
+- Upgrade note: download a backup before upgrading (Settings → Your data). The database is migrated in place, and an older version knows nothing about sells: if you go back to it after recording a sale, it reads that sale as a purchase.
 
 ## 1.1.2
 - Phones: no page can scroll sideways any more (iPhone Safari ignored the old guard), and the Scenario ranges table fits narrow screens. Pinch-zoom still works.

@@ -229,7 +229,7 @@ def compose_system_prompt(persona: str | None, prefs: dict | None, data_level: s
     sharing = (
         "You see full portfolio detail (amounts, quantities, costs, realized P/L, purchase and sale dates, platforms, holding notes)."
         if data_level == "full" else
-        "You see relative figures only (weights, percentage changes, indicators) - no amounts, "
+        "You see relative figures only (weights, percentage changes, indicators, whether a holding is sold out) - no amounts, "
         "quantities, costs, purchase dates or platforms. Do not ask for amounts, quantities, costs or "
         "purchase dates; reason in percentages. You may ask where the user holds investments or lives when an "
         "answer depends on it."

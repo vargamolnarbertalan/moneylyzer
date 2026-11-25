@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from analyzer import db, market
-from analyzer.engine import fifo_shortfall, realized_by_sale, summarize_position
+from analyzer.engine import fifo_shortfall, realized_by_sale, summarize_position, units_text
 from analyzer.validation import validate_lots
 
 
@@ -184,6 +184,16 @@ class SellTests(unittest.TestCase):
         out = summarize_position(self.usd, no_sale_price, 150.0, "USD", {"USD": 380.0}, self.rate_on)
         self.assertIn("1 sale(s) without unit price or amount received", out["check"])
         self.assertAlmostEqual(out["cost_base"], 1 * 100.0 * 300.0)          # the open unit is still valued
+
+    def test_units_are_written_in_fixed_notation(self):
+        self.assertEqual(units_text(1500000), "1500000 units")
+        self.assertEqual(units_text(1234.5678), "1234.5678 units")
+        self.assertEqual(units_text(0.123456789), "0.12345679 units")
+        self.assertEqual((units_text(1), units_text(0), units_text(-0.0), units_text(3)), ("1 unit", "0 units", "0 units", "3 units"))
+        item = dict(self.usd, quantity=2000000)
+        out = summarize_position(item, [{"buy_date": "2025-01-10", "quantity": 1500000, "unit_price": 100.0}], 150.0, "USD",
+                                 {"USD": 380.0}, self.rate_on)
+        self.assertIn("Transactions total 1500000 units but the holding row says 2000000;", out["check"])
 
     def test_no_sales_means_zero_realized(self):
         out = summarize_position(self.usd, [{"buy_date": "2025-01-10", "quantity": 1, "unit_price": 100.0}], 150.0, "USD",
@@ -388,6 +398,43 @@ class SellStorageTests(TempDb):
             db.add_lots([self.lot("2025-01-15", 3, "sell")])
         self.assertIn("your sale on 2025-02-01", str(later.exception))
         self.assertEqual(db.count_lots("A"), 2)
+
+    def test_a_holding_whose_units_come_from_its_record_cannot_be_sold_from(self):
+        db.upsert_instrument({"instrument_id": "R", "name": "R", "asset_type": "stock", "currency": "HUF", "quantity": 10, "avg_cost": 100})
+        sale = {"instrument_id": "R", "buy_date": "2026-11-01", "quantity": 4, "unit_price": 130.0, "side": "sell"}
+        with self.assertRaises(db.SaleTooLarge) as caught:     # the page shows 10 units: "you held 0" would be wrong
+            db.add_lots([sale])
+        self.assertIsInstance(caught.exception, db.NoPurchases)
+        self.assertEqual(str(caught.exception), "This holding's units come from its holding record. Record its purchases first, then the sale.")
+        self.assertEqual(db.count_lots("R"), 0)
+        self.assertEqual(db.add_lots([dict(sale, side="buy", buy_date="2026-10-01"), sale]), (2, 0))  # a purchase in the same call is enough
+
+    def test_the_blamed_row_is_the_new_sale_that_starves_a_stored_one(self):
+        db.add_lots([self.lot("2025-01-02", 3), self.lot("2025-02-01", 2, "sell")])
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            # row 0 comes after the stored sale and is harmless; row 1 is dated before it and takes its units
+            db.add_lots([self.lot("2025-03-01", 1, "sell"), self.lot("2025-01-15", 2, "sell")])
+        self.assertEqual(caught.exception.row, 1)       # CSV line 3
+        self.assertIn("your sale on 2025-02-01", str(caught.exception))
+        self.assertEqual(db.count_lots("A"), 2)
+
+    def test_import_order_does_not_matter(self):
+        # a newest-first export: the sale is listed above the buy it sells, on the same day
+        self.assertEqual(db.add_lots([self.lot("2025-03-01", 2, "sell", 120), self.lot("2025-03-01", 2, "buy", 100)]), (2, 0))
+        self.assertEqual(list(db.get_lots()["side"]), ["buy", "sell"])   # stored buy first: replays the same as oldest-first
+        # an oversell still blames the row it came from, whatever order the rows were stored in
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            db.add_lots([self.lot("2025-05-01", 5, "sell"), self.lot("2025-04-01", 3), self.lot("2025-04-02", 1)])
+        self.assertEqual((caught.exception.row, str(caught.exception)), (0, "On 2025-05-01 you held 4 units; a sale can't be larger."))
+        self.assertEqual(db.count_lots("A"), 2)
+
+    def test_big_quantities_are_not_written_in_scientific_notation(self):
+        db.upsert_instrument({"instrument_id": "B", "name": "B", "asset_type": "government_bond", "currency": "HUF", "price_divisor": 100})
+        bond = {"instrument_id": "B", "buy_date": "2025-01-02", "quantity": 1500000, "unit_price": 98.5}
+        db.add_lots([bond])
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            db.add_lots([dict(bond, buy_date="2025-06-02", quantity=1500001, side="sell")])
+        self.assertEqual(str(caught.exception), "On 2025-06-02 you held 1500000 units; a sale can't be larger.")
 
     def test_deleting_a_buy_a_later_sale_needs(self):
         db.add_lots([self.lot("2025-01-02", 3), self.lot("2025-02-01", 2, "sell")])

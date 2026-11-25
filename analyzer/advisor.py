@@ -123,8 +123,8 @@ def delete_provider(provider_id: str) -> None:
 
 
 def set_data_level(provider_id: str, level: str) -> None:
-    """What a model may see: 'relative' (weights, % changes) or 'full' (also amounts, quantities, costs, dates,
-    platforms and holding notes)."""
+    """What a model may see: 'relative' (weights, % changes, whether a holding is sold out) or 'full' (also
+    amounts, quantities, costs, dates, platforms and holding notes)."""
     if level not in ("relative", "full"):
         raise ValueError("data_level must be relative or full")
     with db.connect() as conn:

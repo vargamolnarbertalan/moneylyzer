@@ -225,7 +225,9 @@ export interface AppSettings {
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
 export type DataLevel = "relative" | "full";
 /** What "full detail" adds, in one place for every text that describes it (server: analyzer/persona.py). */
-export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes";
+/** What a model sees at the relative level (the one shared text, like FULL_DETAIL_ITEMS below). */
+export const RELATIVE_ITEMS = "weights, % changes and whether a holding is sold out";
+export const FULL_DETAIL_ITEMS ="amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {

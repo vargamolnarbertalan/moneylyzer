@@ -28,15 +28,18 @@ type RangeValue = (typeof RANGES)[number]["value"];
 const RANGE_DAYS: Record<RangeValue, number | null> = { "1W": 8, "1M": 31, "6M": 183, "1Y": 366, ALL: null };
 
 export function HoldingPage({ id }: { id: string }) {
-  const detail = useResource(() => endpoints.instrument(id), [id]);
-  // The page header names the holding ("Apple"), not the route ("Holding").
-  useHeaderTitle(detail.data?.instrument.name ?? null);
   const live = useLive();
   const base = useBase();
+  const liveRow = live.snapshot?.rows.find((r) => r.id === id) ?? null;
+  // The sales' realized P/L is computed on the server in the reporting currency: reload it when the
+  // currency changes, or when the holding's realized total moves (a sale recorded elsewhere, a rate arriving),
+  // so a row never shows an old number under the new currency's symbol.
+  const detail = useResource(() => endpoints.instrument(id), [id, base, liveRow?.realized_base ?? null]);
+  // The page header names the holding ("Apple"), not the route ("Holding").
+  useHeaderTitle(detail.data?.instrument.name ?? null);
   const d = detail.data;
   useTitle(d ? d.instrument.name : "Holding");
 
-  const liveRow = live.snapshot?.rows.find((r) => r.id === id) ?? null;
   const row = liveRow ?? d?.position ?? null;
 
   if (detail.loading && !d) {

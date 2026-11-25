@@ -181,6 +181,7 @@ export function Purchases({ instrumentId, currency, base, lots, onChanged }: Pur
             currency={currency}
             base={base}
             onAdded={onChanged}
+            canSell={lots.some((l) => l.side === "buy")}
             focusFirst={lots.length > 0}
             onCancel={
               lots.length > 0
@@ -209,19 +210,25 @@ interface AddPurchaseProps {
   currency: string;
   base: string;
   onAdded: () => void;
-  /** Opened from the "Add transaction" button: start in the first field. */
+  /** Opened from the "Add transaction" button: start in the first control. */
   focusFirst?: boolean;
   /** Folds the form away again (absent while it is the only way to add the first transaction). */
   onCancel?: () => void;
+  /** A sale needs a recorded purchase to sell from: without one only buys can be added. */
+  canSell: boolean;
 }
 
-function AddPurchase({ instrumentId, currency, base, onAdded, focusFirst = false, onCancel }: AddPurchaseProps) {
+function AddPurchase({ instrumentId, currency, base, onAdded, focusFirst = false, onCancel, canSell }: AddPurchaseProps) {
   const uid = useId();
   const firstRef = useRef<HTMLInputElement>(null);
+  const sideRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (focusFirst) firstRef.current?.focus();
+    // The Buy/Sell choice comes first: a keyboard or screen-reader user must not record a sale as a buy by
+    // landing on the date. Focus its pressed segment; without a toggle (no purchase yet) the date.
+    if (focusFirst) (sideRef.current?.querySelector<HTMLElement>('button[aria-pressed="true"]') ?? firstRef.current)?.focus();
   }, [focusFirst]);
-  const [side, setSide] = useState<Side>("buy");
+  const [sideChoice, setSide] = useState<Side>("buy");
+  const side: Side = canSell ? sideChoice : "buy";
   const [date, setDate] = useState(localISODate());
   const [quantity, setQuantity] = useState("");
   const [unitPrice, setUnitPrice] = useState("");
@@ -270,9 +277,13 @@ function AddPurchase({ instrumentId, currency, base, onAdded, focusFirst = false
       <h3 id={`${uid}h`} style={{ fontSize: 14 }}>
         Add transaction
       </h3>
-      <div>
-        <Segmented label="Transaction type" options={SIDES} value={side} onChange={setSide} />
-      </div>
+      {canSell ? (
+        <div ref={sideRef}>
+          <Segmented label="Transaction type" options={SIDES} value={side} onChange={setSide} />
+        </div>
+      ) : (
+        <p className="help">This holding's units come from its holding record. Record its purchases first, then the sale.</p>
+      )}
       <div className="form-grid">
         <div className="field">
           <label htmlFor={`${uid}d`}>Date</label>

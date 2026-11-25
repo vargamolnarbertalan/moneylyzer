@@ -258,9 +258,13 @@ def fifo_shortfall(lots: list[dict]) -> dict | None:
     return None
 
 
+def plain_number(x: float) -> str:
+    """Fixed notation, at most 8 decimals, no trailing zeros: 1500000 and 1234.5678, never 1.5e+06."""
+    return f"{round(x, 8) + 0.0:.8f}".rstrip("0").rstrip(".")  # + 0.0 turns -0.0 into 0.0
+
+
 def units_text(units: float) -> str:
-    units = round(units, 8)
-    return f"{units:g} {'unit' if units == 1 else 'units'}"
+    return f"{plain_number(units)} {'unit' if round(units, 8) == 1 else 'units'}"
 
 
 def shortfall_message(shortfall: dict) -> str:
@@ -402,7 +406,7 @@ def summarize_position(
         )
         row_qty = item.get("quantity")
         if _known(row_qty) and float(row_qty) > 0 and abs(float(row_qty) - quantity) > 1e-9 * max(1.0, quantity):
-            notes.append(f"Transactions total {quantity:g} units but the holding row says {float(row_qty):g}; transactions are used")
+            notes.append(f"Transactions total {plain_number(quantity)} units but the holding row says {plain_number(float(row_qty))}; transactions are used")
     else:
         quantity = float(item.get("quantity") or 0.0)
         raw_avg = item.get("avg_cost")

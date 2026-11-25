@@ -459,6 +459,38 @@ class ApiTests(unittest.TestCase):
         closed = self.client.get("/api/portfolio").json()["rows"][0]                # the last unit sold
         self.assertEqual((closed["closed"], closed["weight"], closed["value_base"]), (True, None, 0.0))
 
+    def test_record_only_holdings_and_csv_files_in_any_order(self):
+        self.setup_account()
+        record = "This holding's units come from its holding record. Record its purchases first, then the sale."
+        self.client.post("/api/instruments", json={"instrument_id": "R", "name": "R", "asset_type": "stock", "quantity": 10,
+                                                   "avg_cost": 100, "currency": "EUR"}, headers=H).raise_for_status()
+        sale = {"instrument_id": "R", "side": "sell", "buy_date": "2025-04-03", "quantity": 4, "unit_price": 8}
+        r = self.client.post("/api/lots", json=sale, headers=H)
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, record))     # the page shows 10 units, not 0
+
+        def upload(text):
+            return self.client.post("/api/import/lots", files={"file": ("l.csv", io.BytesIO(text.encode()), "text/csv")}, headers=H)
+        head = "instrument_id,buy_date,side,quantity,unit_price\n"
+        r = upload(head + "R,2025-01-02,buy,1,5\nR,2025-04-03,sell,1,8\nR,2025-04-04,buy,1,5\n")
+        self.assertEqual(r.status_code, 200, r.text)                              # a purchase in the file is enough
+        self.client.post("/api/instruments", json={"instrument_id": "S", "name": "S", "asset_type": "stock", "quantity": 10,
+                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        r = upload(head + "S,2025-01-02,sell,1,8\n")
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, "CSV line 2: " + record))
+
+        self.client.post("/api/instruments", json={"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0,
+                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        newest_first = head + "A,2025-03-01,sell,2,6\nA,2025-03-01,buy,2,5\n"    # the sale above the buy it sells
+        self.assertEqual(upload(newest_first).json(), {"added": 2, "skipped_duplicates": 0})
+        self.assertEqual(upload(newest_first).json(), {"added": 0, "skipped_duplicates": 2})
+        self.client.post("/api/instruments", json={"instrument_id": "B", "name": "B", "asset_type": "stock", "quantity": 0,
+                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        self.assertEqual(upload(head + "B,2025-01-02,buy,3,5\nB,2025-02-01,sell,2,6\n").status_code, 200)
+        # line 3 (not line 2) is the new sale that takes the units the stored February sale needs
+        r = upload(head + "B,2025-03-01,sell,1,6\nB,2025-01-15,sell,2,6\n")
+        self.assertEqual((r.status_code, r.json()["detail"]),
+                         (400, "CSV line 3: That would leave your sale on 2025-02-01 larger than the 1 unit you would hold then."))
+
     def test_zero_price_purchase_rejected(self):
         self.setup_account()
         self.client.post("/api/instruments", json={"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0, "currency": "EUR"}, headers=H)
