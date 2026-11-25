@@ -162,6 +162,8 @@ class Credentials(BaseModel):
 
 class SetupBody(Credentials):
     code: str = Field(min_length=1, max_length=32)
+    # a new install's reporting currency, from the browser's region; ignored unless it is a listed one
+    base_currency: str | None = Field(default=None, max_length=3)
 
 
 class PasswordChange(BaseModel):
@@ -203,6 +205,9 @@ def auth_state(request: Request):
 @app.post("/api/auth/setup", dependencies=[Depends(auth.require_csrf)])
 def auth_setup(body: SetupBody, request: Request, response: Response):
     auth.setup(body.username, body.password, body.code)
+    code = (body.base_currency or "").strip().upper()
+    if code in COMMON_CURRENCIES and db.get_setting("base_currency") is None:
+        db.set_setting("base_currency", code)
     _set_cookie(response, auth.login(body.username, body.password, auth.client_ip(request)))
     return {"user": body.username.strip()}
 
@@ -317,8 +322,10 @@ async def stream(request: Request, user: str = Depends(auth.require_user)):
 
 
 # ---------------------------------------------------------------- settings (reporting currency)
-COMMON_CURRENCIES = ["HUF", "EUR", "USD", "GBP", "CHF", "PLN", "CZK", "RON", "SEK", "NOK", "DKK", "JPY", "CNY",
-                     "AUD", "CAD"]
+# Neutral order (widely used first); the reporting currency goes first wherever a list is shown.
+# Keep in step with frontend/src/currencies.ts.
+COMMON_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF",
+                     "RON"]
 
 
 class AppSettingsBody(BaseModel):

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { SHORT_NOTICE } from "../legal";
 import { endpoints, errorMessage } from "../api";
+import { browserCurrency } from "../currencies";
 import { takeReturnTo, useAuth } from "../auth";
 import { Alert } from "../components/Alert";
 import { useTitle } from "../hooks";
@@ -26,7 +27,7 @@ export function LoginPage({ setupRequired }: { setupRequired: boolean }) {
     setBusy(true);
     try {
       const res = setupRequired
-        ? await endpoints.setup(username.trim(), password, code.trim())
+        ? await endpoints.setup(username.trim(), password, code.trim(), browserCurrency())
         : await endpoints.login(username.trim(), password);
       auth.signedIn(res.user);
       navigate(takeReturnTo(), { replace: true });

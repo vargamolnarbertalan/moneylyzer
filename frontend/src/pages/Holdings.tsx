@@ -352,6 +352,9 @@ interface HoldingFormProps {
 
 function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: HoldingFormProps) {
   const uid = useId();
+  // fund:<ISIN> prices exist only for Hungarian funds: mention it to HUF users or where it is already used
+  const base = useLive().snapshot?.base_currency;
+  const fundHint = base === "HUF" || form.currency.trim().toUpperCase() === "HUF" || form.market_symbol.trim().startsWith("fund:");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: keyof FormState) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
@@ -434,7 +437,7 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: Hold
             <label htmlFor={fid("sym")}>Market symbol, optional</label>
             <input id={fid("sym")} value={form.market_symbol} onChange={set("market_symbol")} autoComplete="off" spellCheck={false} aria-describedby={fid("symh")} />
             <span id={fid("symh")} className="help">
-              Yahoo ticker (e.g. VWCE.DE, GC=F) or fund:&lt;ISIN&gt; for Hungarian funds
+              {fundHint ? "Yahoo ticker (e.g. VWCE.DE, GC=F), or fund:<ISIN> for a Hungarian investment fund" : "Yahoo ticker (e.g. VWCE.DE, GC=F)"}
             </span>
           </div>
           <div className="field">

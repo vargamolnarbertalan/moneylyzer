@@ -427,8 +427,9 @@ export const endpoints = {
   authState: () => api.get<AuthState>("/api/auth/state"),
   login: (username: string, password: string) =>
     api.post<{ user: string }>("/api/auth/login", { username, password }, { keepOn401: true }),
-  setup: (username: string, password: string, code: string) =>
-    api.post<{ user: string }>("/api/auth/setup", { username, password, code }, { keepOn401: true }),
+  /** baseCurrency: the new install's reporting currency (from the browser's region). */
+  setup: (username: string, password: string, code: string, baseCurrency: string) =>
+    api.post<{ user: string }>("/api/auth/setup", { username, password, code, base_currency: baseCurrency }, { keepOn401: true }),
   logout: () => api.post<{ ok: boolean }>("/api/auth/logout"),
   /** Which "not financial advice" notice version the owner accepted (src/legal.ts holds the text). */
   disclaimer: () => api.get<{ accepted_version: string | null; accepted_at: string | null }>("/api/disclaimer"),

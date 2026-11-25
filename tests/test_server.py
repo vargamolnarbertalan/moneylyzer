@@ -302,6 +302,19 @@ class ApiTests(unittest.TestCase):
         self.assertIn("Start a new conversation", r.json()["detail"])
         sent.assert_not_called()
 
+    def test_setup_takes_the_browser_currency_once(self):
+        r = self.client.post("/api/auth/setup", headers=H, json={"username": "owner", "password": "correct horse 1",
+                                                                 "code": auth._setup_code, "base_currency": "eur"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(db.base_currency(), "EUR")
+        self.assertEqual(self.client.get("/api/settings", headers=H).json()["currencies"][0], "EUR")
+
+    def test_setup_ignores_an_unlisted_currency(self):
+        r = self.client.post("/api/auth/setup", headers=H, json={"username": "owner", "password": "correct horse 1",
+                                                                 "code": auth._setup_code, "base_currency": "XYZ"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(db.base_currency(), "HUF")  # unchanged default
+
     def test_edit_form_never_recreates_a_deleted_holding(self):
         self.setup_account()
         body = {"instrument_id": "GONE", "name": "Gone", "asset_type": "etf", "quantity": 1, "currency": "EUR"}
