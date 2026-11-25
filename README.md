@@ -18,8 +18,8 @@ It is **not** a broker connection, a trading tool or financial advice.
 
 ## What it does
 
-- **Live overview**: total value, unrealized P/L and today's change, refreshed every 60 seconds and
-  pushed to every open tab. Value over time for 1 week to all time; click two points on any chart to
+- **Live overview**: total value, unrealized P/L and today's change, refreshed every minute (15 s to
+  15 min in Settings) and pushed to every open tab; live quotes pause while no tab is open. Value over time for 1 week to all time; click two points on any chart to
   see the change between them. Allocation as bars, a treemap or a donut.
 - **Any display currency**: holdings in EUR, USD, HUF or anything Yahoo quotes are converted at each
   day's exchange rate, so history and P/L are right in the currency you pick.
@@ -96,7 +96,8 @@ Import in this order: holdings first, then transactions and price history, which
 
 The **Data & privacy** page in the app lists every outgoing request in detail. In short:
 
-- Ticker symbols and currency pairs go to Yahoo Finance (prices every 60 s, history daily, news hourly,
+- Ticker symbols and currency pairs go to Yahoo Finance (prices every minute while the app is open in a
+  browser, history daily, news hourly,
   a holding's minute or hour prices while its chart shows them, and what you type in the add-holding
   search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
 - Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
@@ -125,7 +126,7 @@ Set these under `environment:` in `docker-compose.yml`:
 |---|---|---|
 | `LIA_DONATE_URL` | the author's link | Empty hides the "Buy me a coffee" button |
 | `LIA_COOKIE_SECURE` | off | `1` behind an HTTPS reverse proxy |
-| `LIA_LIVE_SECONDS` | `60` | How often live prices are fetched |
+| `LIA_LIVE_SECONDS` | `60` | How often live prices are fetched (seconds, rounded to 15/30/60/120/300/900) until a choice is saved in Settings |
 
 ## Development
 

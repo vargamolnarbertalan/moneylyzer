@@ -58,6 +58,8 @@ function connect(): void {
   if (source) return;
   const es = new EventSource("/api/stream");
   source = es;
+  // a tab opened in the background (middle-click, restored pinned tab) never sees a "hidden" change
+  if (document.visibilityState === "hidden") releaseIfHidden();
   es.onopen = () => setState({ phase: "open" });
   es.addEventListener("snapshot", (ev) => {
     try {
@@ -86,6 +88,7 @@ function connect(): void {
 
 function disconnect(): void {
   window.clearTimeout(retryTimer);
+  window.clearTimeout(hiddenTimer);
   source?.close();
   source = null;
 }
@@ -114,6 +117,27 @@ function release(): void {
   releaseTimer = window.setTimeout(() => {
     if (holders === 0) disconnect();
   }, 200);
+}
+
+// A tab in the background for a minute lets go of the stream: with no browser watching, the server stops
+// polling Yahoo. Back in view, it reconnects and the server refreshes at once if its prices are older than
+// the interval. The minute's grace keeps a quick switch to another tab and back from reconnecting.
+const HIDDEN_GRACE_MS = 60_000;
+let hiddenTimer: number | undefined;
+function releaseIfHidden(): void {
+  window.clearTimeout(hiddenTimer);
+  hiddenTimer = window.setTimeout(() => {
+    if (document.visibilityState === "hidden") disconnect();
+  }, HIDDEN_GRACE_MS);
+}
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") releaseIfHidden();
+    else {
+      window.clearTimeout(hiddenTimer);
+      if (holders > 0 && !source) connect();
+    }
+  });
 }
 
 /** Forget everything (sign-out, session expired). */

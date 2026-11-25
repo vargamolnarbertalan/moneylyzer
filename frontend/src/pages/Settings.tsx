@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { CodeXml, FileUp, Scale, ShieldCheck } from "lucide-react";
 import { endpoints, errorMessage } from "../api";
 import { useAuth } from "../auth";
@@ -27,6 +27,60 @@ const THEMES = [
   { value: "dark", label: "Dark" },
   { value: "light", label: "Light" },
 ] as const;
+
+const LIVE_LABELS: Record<number, { label: string; name: string }> = {
+  15: { label: "15 s", name: "15 seconds" },
+  30: { label: "30 s", name: "30 seconds" },
+  60: { label: "1 min", name: "1 minute" },
+  120: { label: "2 min", name: "2 minutes" },
+  300: { label: "5 min", name: "5 minutes" },
+  900: { label: "15 min", name: "15 minutes" },
+};
+
+/** How often live prices refresh; saved on the server and applied at once (no restart). */
+function LiveInterval() {
+  const settings = useResource(() => endpoints.settings(), []);
+  const [chosen, setChosen] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const latest = useRef(0); // only the newest click's answer may set what is shown
+  const data = settings.data;
+  if (!data) return settings.error ? <Alert tone="err">Could not load the refresh interval: {settings.error}</Alert> : null;
+  const value = String(chosen ?? data.live_seconds);
+  const choose = async (v: string) => {
+    const request = ++latest.current;
+    setChosen(Number(v));
+    setError(null);
+    try {
+      const saved = await endpoints.saveLiveSeconds(Number(v));
+      if (request === latest.current) setChosen(saved.live_seconds); // what the server now uses
+    } catch (err) {
+      if (request !== latest.current) return;
+      setError(errorMessage(err));
+      setChosen(null);
+      settings.reload(); // show the interval the server really has
+    }
+  };
+  return (
+    <>
+      <p className="sub" style={{ margin: "14px 0 10px" }}>
+        Live prices and exchange rates refresh this often while Moneylyzer is open in a browser. With no tab open (or
+        one in the background for a minute), live prices pause until you come back; daily prices and news are still
+        collected hourly.
+      </p>
+      <Segmented
+        label="Live price refresh"
+        options={data.live_choices.map((s) => ({ value: String(s), label: LIVE_LABELS[s]?.label ?? `${s} s`, name: LIVE_LABELS[s]?.name }))}
+        value={value}
+        onChange={(v) => void choose(v)}
+      />
+      {error && (
+        <p className="field-err" role="alert">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
 
 export function SettingsPage() {
   useTitle("Settings");
@@ -69,6 +123,7 @@ export function SettingsPage() {
               Totals, P/L and charts are shown in {base}. Rates come from Yahoo Finance; each past day uses that day's rate.
             </p>
             <CurrencySwitcher showLabel />
+            <LiveInterval />
           </Card>
         </div>
 
