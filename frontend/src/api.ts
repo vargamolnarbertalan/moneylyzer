@@ -209,7 +209,13 @@ export interface AuthState {
 }
 
 export interface ClaudeStatus {
+  /** Connect can work here: Claude Code is installed, or the server can download it on the first Connect. */
   available: boolean;
+  /** False until the first Connect has downloaded Claude Code onto the server. */
+  installed?: boolean;
+  install_note?: string;
+  /** Why Connect cannot work on this server (only when available is false). */
+  reason?: string;
   loggedIn: boolean;
   authMethod?: Nullable<string>;
   subscription?: Nullable<string>;

@@ -36,6 +36,30 @@ def _package() -> str:
     return f"@anthropic-ai/claude-code-linux-{arch}{'-musl' if musl else ''}"
 
 
+def _container() -> bool:
+    return Path("/.dockerenv").exists() or Path("/run/.containerenv").exists()
+
+
+def install_blocker() -> str | None:
+    """Why this server cannot install Claude Code on first use, or None when Connect can install it."""
+    try:
+        _package()
+    except InstallError as exc:
+        if _container():
+            return f"{exc} Claude Code has no build for this server's CPU, so pick another AI model."
+        return (f"{exc} Install Claude Code on this computer and sign in once by running claude in a terminal; "
+                "the app then finds it on the PATH or at the path in CLAUDE_CLI.")
+    probe = binary_path().parent
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent  # install() creates the missing folders
+    if not os.access(probe, os.W_OK | os.X_OK):
+        return f"The data folder {probe} is not writable, so Claude Code cannot be installed into it."
+    # A noexec mount passes the access check, but the downloaded binary could never run from it.
+    if hasattr(os, "statvfs") and os.statvfs(probe).f_flag & getattr(os, "ST_NOEXEC", 0):
+        return f"The data folder {probe} is mounted noexec, so Claude Code cannot run from it. Mount it without noexec."
+    return None
+
+
 def binary_path() -> Path:
     return db.DATA_DIR / "bin" / f"claude-{VERSION}"
 
