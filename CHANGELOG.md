@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.2
+- Phones: no page can scroll sideways any more (iPhone Safari ignored the old guard), and the Scenario ranges table fits narrow screens. Pinch-zoom still works.
+
 ## 1.1.1
 - Phones: tapping a form field no longer zooms the page in (iPhone Safari), which also let the page scroll sideways. Pinch-zoom still works.
 

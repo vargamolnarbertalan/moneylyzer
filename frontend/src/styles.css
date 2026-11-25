@@ -67,6 +67,11 @@
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
+  /* The page never scrolls sideways: iPhone Safari ignores overflow on <body> alone, so anything that
+     sticks out for a moment (a long word in a wider system font, an animation) let the whole page slide.
+     clip (unlike hidden) creates no scroll container, so sticky headers keep working; pinch-zoom and
+     panning a zoomed page still work. Tables and code that are wider scroll inside their own box. */
+  overflow-x: clip;
 }
 html,
 body {
@@ -78,7 +83,8 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100dvh;
-  overflow-x: hidden;
+  overflow-x: hidden; /* browsers without clip (iOS before 16) */
+  overflow-x: clip;
 }
 body::before {
   content: "";
@@ -1150,6 +1156,12 @@ a.link-btn {
 .dt th[aria-sort="ascending"] .th-btn,
 .dt th[aria-sort="descending"] .th-btn {
   color: var(--text);
+}
+/* Phones: headers may wrap, so a 4-column table such as Scenario ranges fits without scrolling. */
+@media (max-width: 480px) {
+  .dt thead th {
+    white-space: normal;
+  }
 }
 .th-btn .arrow {
   font-size: 9px;
