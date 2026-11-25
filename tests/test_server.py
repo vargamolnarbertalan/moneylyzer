@@ -333,7 +333,7 @@ class ApiTests(unittest.TestCase):
         # an AI question with a long conversation behind it is not cut off at 1 MiB (422: history is no list)
         ask = '{"question": "hi", "history": "' + "x" * (2 * 1024 * 1024) + '"}'
         self.assertEqual(self.client.post("/api/advisor/ask", content=ask, headers=raw).status_code, 422)
-        big_ask = '{"question": "hi", "history": "' + "x" * (5 * 1024 * 1024) + '"}'
+        big_ask = '{"question": "hi", "history": "' + "x" * (14 * 1024 * 1024) + '"}'  # over the 13 MiB with attachments
         r = self.client.post("/api/advisor/ask", content=big_ask, headers=raw)
         self.assertEqual(r.status_code, 413)
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])  # a 413 keeps the headers

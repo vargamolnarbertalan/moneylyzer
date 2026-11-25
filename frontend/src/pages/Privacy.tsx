@@ -74,11 +74,11 @@ const FLOWS: readonly Flow[] = [
   },
   {
     name: "AI model (only when you ask)",
-    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio " + RELATIVE_ITEMS + "; with full detail also your " + FULL_DETAIL_ITEMS + ".",
+    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio " + RELATIVE_ITEMS + "; with full detail also your " + FULL_DETAIL_ITEMS + ". Files you attach to a question go with that question, at either level.",
     gets: "the answer and the sources it used.",
     linkable: "account",
     linkNote: "Yes: the provider knows the account you connected (Claude login or API key) and can link every question to it. A local model stays on your network.",
-    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase and sale history, where you hold what and your holding notes (free text).",
+    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase and sale history, where you hold what and your holding notes (free text). Whatever is in a file you attach.",
   },
   {
     name: "npm",
@@ -158,7 +158,9 @@ function AiSharing() {
       <p className="sub">
         Your questions and the answers (with the model, effort, sources and what was shared, never your portfolio data itself) are saved on this
         server as Recent conversations in the AI analyst: for 90 days after the last answer, at most the 100 newest. Delete one or all there;
-        backups you already downloaded keep what they had.
+        backups you already downloaded keep what they had. Files you attach to a question go to that model with that question only, whatever
+        you set for it below. Moneylyzer doesn't keep the files, only their names and sizes; an answer that quotes one is saved like any answer.
+        On a question with files, Claude login with web research may search the web but not open pages, so hidden text in a file can't make it visit an address.
       </p>
       {providers.loading && !providers.data ? (
         <BlockSkeleton rows={2} />

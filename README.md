@@ -101,8 +101,9 @@ The **Data & privacy** page in the app lists every outgoing request in detail. I
 - Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
   persona and investing preferences, and weights, percentage changes and whether a holding is sold out.
   Amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes are
-  sent only to a model you set to full detail.
-- Never sent anywhere: the database, your account, your CSV files. The app has no telemetry.
+  sent only to a model you set to full detail. A file you attach to a question goes to that model with
+  that question, at either level; the app keeps only its name and size.
+- Never sent anywhere: the database, your account, the CSV files you import. The app has no telemetry.
 
 ## Your data and backups
 

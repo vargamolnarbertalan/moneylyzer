@@ -408,7 +408,7 @@ class ContextPrivacyTests(TempDb):
     def test_ask_uses_provider_level_and_reports_what_was_shared(self):
         captured = {}
 
-        def fake_complete(provider, system, messages):
+        def fake_complete(provider, system, messages, attachments=None):
             captured.update(system=system, messages=messages)
             return {"text": "ok", "model": "m", "sources": []}
 
@@ -432,7 +432,7 @@ class ContextPrivacyTests(TempDb):
     def test_chat_effort_applies_to_the_question_only_and_is_reported(self):
         used = []
 
-        def fake_complete(provider, system, messages):
+        def fake_complete(provider, system, messages, attachments=None):
             used.append(provider.effort)
             return {"text": "ok", "model": "m", "sources": []}
 
@@ -568,7 +568,7 @@ class ContextPrivacyTests(TempDb):
         self.assertNotIn("rules", s["preferences"])
         captured = {}
         with mock.patch("analyzer.advisor.complete",
-                        lambda p, system, m: captured.update(system=system) or {"text": "ok", "model": "m", "sources": []}):
+                        lambda p, system, m, attachments=None: captured.update(system=system) or {"text": "ok", "model": "m", "sources": []}):
             advisor.ask(None, "Which ETF?", [], self.snapshot())
         self.assertIn("1. Only EUR holdings", captured["system"])
         advisor.save_settings(None, None, rules=[])

@@ -1,6 +1,6 @@
 // Advisor conversation helpers: the quick prompts, the sessionStorage-backed conversation, the hand-over
 // from the Overview card, and the history the API wants.
-import type { AdvisorAnswer, ChatTurn, DataLevel, Effort } from "./api";
+import type { AdvisorAnswer, AttachedFile, ChatTurn, DataLevel, Effort } from "./api";
 import { EFFORTS } from "./effort";
 import { readSession, removeSession, writeSession } from "./storage";
 
@@ -8,6 +8,8 @@ export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
   content: string;
+  /** Only on questions: the files attached to it (names and sizes; the files themselves are not kept). */
+  files?: AttachedFile[];
   /** Only on answers. */
   meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared">;
 }
@@ -155,6 +157,7 @@ export function conversationMarkdown(messages: readonly ChatMessage[], exportedA
   for (const m of messages) {
     if (m.role === "user") {
       lines.push("", "## Question", "", m.content);
+      if (m.files?.length) lines.push("", "Attached: " + m.files.map((f) => f.name).join(", "));
       continue;
     }
     const meta = m.meta;
@@ -172,7 +175,12 @@ export function conversationMarkdown(messages: readonly ChatMessage[], exportedA
 export function historyBefore(messages: readonly ChatMessage[], index: number): ChatTurn[] {
   return messages
     .slice(0, index)
-    .map((m) => ({ role: m.role, content: m.content }) satisfies ChatTurn)
+    // files go with their own question only: say so, or a follow-up ("row 12 of that statement?") invites
+    // the model to answer from its earlier summary as if it still had the file
+    .map((m) => ({
+      role: m.role,
+      content: m.files?.length ? `${m.content}\n\n(Attached to this question and not sent again: ${m.files.map((f) => f.name).join(", ")}.)` : m.content,
+    }) satisfies ChatTurn)
     .slice(-MAX_HISTORY);
 }
 

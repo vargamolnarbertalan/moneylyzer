@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from analyzer import db, research, secrets_store
+from analyzer import attachments, db, research, secrets_store
 from analyzer.engine import analyze_history
 from analyzer.llm import Provider, applied_effort, complete, takes_effort, validate
 from analyzer.persona import DEFAULT_PERSONA, compose_system_prompt, normalize_preferences, normalize_rules
@@ -309,7 +309,8 @@ def render_context(ctx: dict) -> str:
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
         instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None,
-        effort: str | None = None, conversation_id: str | None = None, turn_id: str | None = None) -> dict:
+        effort: str | None = None, conversation_id: str | None = None, turn_id: str | None = None,
+        files: list[tuple[str, bytes]] | None = None) -> dict:
     """`effort` overrides the model's saved effort for this question only (chosen in the chat; never saved).
     With `conversation_id` the question and its answer are saved to that conversation once answered."""
     question = (question or "").strip()
@@ -332,6 +333,10 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     shared = {"data_level": provider.data_level, "holdings": len(ctx["portfolio"]["holdings"]),
               "notes": sum(1 for h in ctx["portfolio"]["holdings"] if h.get("notes")),
               "benchmarks": len(ctx["market"]), "news_items": len(ctx["news"]), "web_research": provider.can_browse}
+    # Attached files go to this model with this question only, whatever its sharing level: attaching is the consent.
+    parts = attachments.fit_request([attachments.prepare(name, raw) for name, raw in (files or [])])
+    if parts:
+        shared["files"] = attachments.summary(parts)
     system = compose_system_prompt(settings["persona"], settings["preferences"], provider.data_level, provider.can_browse,
                                    rules=settings["rules"])
     turns = [m for m in (history or []) if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
@@ -340,12 +345,13 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     # The time travels with the question, not in the system prompt, which stays a stable cacheable prefix.
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
     user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
-    result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}])
+    result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}], attachments=parts)
     answer = {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind},
               "effort": applied_effort(provider), "shared": shared}
     if conversation_id:
         try:
-            save_turn(conversation_id, provider.id, question, answer, instrument_id, now=now, turn_id=turn_id)
+            save_turn(conversation_id, provider.id, question, answer, instrument_id, now=now, turn_id=turn_id,
+                      files=attachments.summary(parts))
         except Exception as exc:  # a failed save must not cost the answer
             log.warning("could not save the AI conversation: %s", exc)
     return answer
@@ -378,7 +384,7 @@ def purge_conversations(now: datetime | None = None) -> None:
 
 
 def save_turn(conversation_id: str, provider_id: str, question: str, answer: dict, instrument_id: str | None = None,
-              now: datetime | None = None, turn_id: str | None = None) -> None:
+              now: datetime | None = None, turn_id: str | None = None, files: list[dict] | None = None) -> None:
     """Append one answered question to a saved conversation (created on its first answer).
 
     `turn_id` is the browser's id for the question: a retried question (the first answer may have been
@@ -407,6 +413,8 @@ def save_turn(conversation_id: str, provider_id: str, question: str, answer: dic
                 user["turn"] = turn_id
             if instrument_id:
                 user["holding"] = instrument_id
+            if files:
+                user["files"] = files  # names and sizes only, never the contents
             messages += [user, reply]
         payload = json.dumps(messages[-MAX_SAVED_MESSAGES:])  # ASCII escapes: a lone surrogate cannot fail the save
         conn.execute(
