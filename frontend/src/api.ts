@@ -260,6 +260,8 @@ export interface Provider {
   local: boolean;
   key_hint: Nullable<string>;
   can_browse: boolean;
+  /** Whether an effort is sent for this model (Claude login always; Claude API for models that document it). */
+  takes_effort: boolean;
 }
 
 export interface ProviderInput {

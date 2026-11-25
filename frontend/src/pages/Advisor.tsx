@@ -39,9 +39,14 @@ export function AdvisorPage() {
   const selected = list.find((p) => p.id === chat.providerId) ?? list.find((p) => p.is_default) ?? list[0] ?? null;
   const holdingName = holdingId ? (live.snapshot?.rows.find((r) => r.id === holdingId)?.name ?? holdingId) : null;
   // Claude models take an effort; a choice made here applies to this conversation only (never saved to the model).
-  const takesEffort = selected !== null && selected.kind !== "openai_compat";
-  const effort: Effort | null = selected && takesEffort ? (chat.effort ?? selected.effort) : null;
-  const overridden = takesEffort && chat.effort != null && chat.effort !== selected?.effort;
+  // The choice belongs to the model it was made for: any other model (a new default, a deleted one) starts from its own.
+  const takesEffort = selected?.takes_effort === true;
+  const chosen = selected && chat.providerId === selected.id ? (chat.effort ?? null) : null;
+  const effort: Effort | null = selected && takesEffort ? (chosen ?? selected.effort) : null;
+  const overridden = takesEffort && chosen != null && chosen !== selected?.effort;
+  // What the picker shows is what the next question sends.
+  const effortRef = useRef<Effort | null>(effort);
+  effortRef.current = effort;
 
   useEffect(() => {
     saveChat(chat);
@@ -75,8 +80,8 @@ export function AdvisorPage() {
         if (level) body.expected_level = level;
         const pid = chatRef.current.providerId;
         if (pid) body.provider_id = pid;
-        const chosen = chatRef.current.effort;
-        if (chosen) body.effort = chosen;
+        const shown = effortRef.current;
+        if (shown) body.effort = shown;
         if (holding) body.instrument_id = holding;
         const res = await endpoints.ask(body);
         setChat((c) => ({
@@ -138,7 +143,7 @@ export function AdvisorPage() {
 
   const newConversation = () => {
     clearChat();
-    setChat((c) => ({ providerId: selected?.id ?? null, effort: c.effort ?? null, messages: [] }));
+    setChat((c) => ({ providerId: selected?.id ?? null, effort: c.providerId === selected?.id ? (c.effort ?? null) : null, messages: [] }));
     setFailure(null);
     setStale(false);
     setDraft("");
@@ -194,20 +199,22 @@ export function AdvisorPage() {
                   value={effort}
                   disabled={waiting}
                   noClosedTypeahead
-                  aria-describedby={overridden ? `${effortId}h` : undefined}
-                  onValueChange={(v) => setChat((c) => ({ ...c, effort: v as Effort }))}
+                  aria-describedby={`${effortId}h`}
+                  onValueChange={(v) => setChat((c) => ({ ...c, providerId: selected?.id ?? c.providerId, effort: v as Effort }))}
                   options={effortOptions()}
                 />
-                {overridden && selected && (
-                  <span id={`${effortId}h`} className="help">
-                    This conversation only; the model's setting is {EFFORT_LABEL[selected.effort].toLowerCase()}.
-                  </span>
-                )}
+                <span id={`${effortId}h`} className="help">
+                  {overridden && selected
+                    ? `This chat only (saved: ${EFFORT_LABEL[selected.effort].toLowerCase()}).`
+                    : "Higher is slower and uses more."}
+                </span>
               </>
             ) : (
               <>
                 <span className="lbl">Effort</span>
-                <span className="static-value">{selected ? "Set by the provider" : "—"}</span>
+                <span className="static-value">
+                  {!selected ? "—" : selected.kind === "openai_compat" ? "Set by the provider" : "Not supported by this model"}
+                </span>
               </>
             )}
           </div>

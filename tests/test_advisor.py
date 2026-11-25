@@ -443,8 +443,15 @@ class ContextPrivacyTests(TempDb):
             local = advisor.save_provider({"name": "Local", "kind": "openai_compat", "model": "llama3.1:8b",
                                            "base_url": "http://127.0.0.1:11434/v1"}, None)
             self.assertIsNone(advisor.ask(local, "q", [], self.snapshot(), effort="max")["effort"])  # takes none
-        self.assertEqual(used, ["default", "xhigh", "high"])  # the local model kept its stored value, unused
+            # Claude API: reported as sent. A model without documented effort gets none, and says so.
+            api = advisor.save_provider({"name": "API", "kind": "anthropic", "model": "claude-opus-5-5", "effort": "high"}, "sk")
+            self.assertEqual(advisor.ask(api, "q", [], self.snapshot(), effort="max")["effort"], "max")
+            old = advisor.save_provider({"name": "Old", "kind": "anthropic", "model": "claude-opus-4-1"}, "sk")
+            self.assertIsNone(advisor.ask(old, "q", [], self.snapshot(), effort="max")["effort"])
+        self.assertEqual(used, ["default", "xhigh", "high", "max", "high"])  # unused effort stays the stored one
         self.assertEqual(advisor.get_provider(None).effort, "default")  # a chat choice is never saved
+        listed = {p["id"]: p["takes_effort"] for p in advisor.list_providers()}
+        self.assertEqual((listed["claude-login"], listed[api], listed[old], listed[local]), (True, True, False, False))
 
     def test_a_conversation_stays_at_its_sharing_level(self):
         sent = mock.Mock(return_value={"text": "ok", "model": "m", "sources": []})
