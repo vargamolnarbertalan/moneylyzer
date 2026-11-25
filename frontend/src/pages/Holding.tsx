@@ -29,15 +29,18 @@ type RangeValue = (typeof RANGES)[number]["value"];
 const RANGE_DAYS: Record<RangeValue, number | null> = { "1W": 8, "1M": 31, "6M": 183, "1Y": 366, ALL: null };
 
 export function HoldingPage({ id }: { id: string }) {
-  const detail = useResource(() => endpoints.instrument(id), [id]);
-  // The page header names the holding ("Apple"), not the route ("Holding").
-  useHeaderTitle(detail.data?.instrument.name ?? null);
   const live = useLive();
   const base = useBase();
+  const liveRow = live.snapshot?.rows.find((r) => r.id === id) ?? null;
+  // The sales' realized P/L is computed on the server in the reporting currency: reload it when the
+  // currency changes, or when the holding's realized total moves (a sale recorded elsewhere, a rate arriving),
+  // so a row never shows an old number under the new currency's symbol.
+  const detail = useResource(() => endpoints.instrument(id), [id, base, liveRow?.realized_base ?? null]);
+  // The page header names the holding ("Apple"), not the route ("Holding").
+  useHeaderTitle(detail.data?.instrument.name ?? null);
   const d = detail.data;
   useTitle(d ? d.instrument.name : "Holding");
 
-  const liveRow = live.snapshot?.rows.find((r) => r.id === id) ?? null;
   const row = liveRow ?? d?.position ?? null;
 
   if (detail.loading && !d) {
@@ -85,6 +88,7 @@ export function HoldingPage({ id }: { id: string }) {
             {[inst.instrument_id, typeLabel(inst.asset_type), inst.currency, inst.market_symbol].filter(Boolean).join(" · ")}
           </div>
         </div>
+        {row?.closed && <span className="badge">Closed</span>}
         <span className="src">{sourceLabel(row?.price_source)}</span>
       </div>
 
@@ -146,8 +150,10 @@ function BackLink() {
 
 function Stats({ row, currency, base }: { row: Row | null; currency: string; base: string }) {
   const lots = row?.lots ?? 0;
+  const sells = row?.sells ?? 0;
+  const buys = lots - sells;
   return (
-    <div className="stats">
+    <div className={sells > 0 ? "stats five" : "stats"}>
       <Card>
         <div className="k">Value</div>
         <div className="mid">
@@ -161,9 +167,28 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
           <Tween tone={signClass} value={row?.pnl_base} format={(v) => signedMoney(v, base)} unit={base} />
         </div>
         <div className="sub">
-          <Pill fraction={row?.pnl_pct} /> <span className="keep">vs. what you paid</span>
+          {row?.closed ? (
+            <span className="keep">nothing held any more</span>
+          ) : (
+            <>
+              <Pill fraction={row?.pnl_pct} /> <span className="keep">vs. what you paid</span>
+            </>
+          )}
         </div>
       </Card>
+      {sells > 0 && (
+        <Card>
+          <div className="k">Realized P/L</div>
+          <div className="mid">
+            <Tween tone={signClass} value={row?.realized_base} format={(v) => signedMoney(v, base)} unit={base} />
+          </div>
+          <div className="sub">
+            {isNum(row?.realized_base)
+              ? `from ${sells} ${sells === 1 ? "sale" : "sales"}, oldest units first`
+              : "a sale is missing its price or an exchange rate"}
+          </div>
+        </Card>
+      )}
       <Card>
         <div className="k">Price per unit</div>
         <div className="mid">
@@ -174,7 +199,7 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
       <Card>
         <div className="k">Average cost</div>
         <div className="mid">{priceWithCcy(row?.avg_cost, currency, true)}</div>
-        <div className="sub">{lots > 0 ? `from ${lots} ${lots === 1 ? "purchase" : "purchases"}` : "from your holding record"}</div>
+        <div className="sub">{buys > 0 ? `from ${buys} ${buys === 1 ? "purchase" : "purchases"}` : "from your holding record"}</div>
       </Card>
     </div>
   );

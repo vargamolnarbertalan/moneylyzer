@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, ShieldAlert, ShieldCheck } from "lucide-react";
-import { FULL_DETAIL_ITEMS, endpoints, errorMessage, type DataLevel, type Provider } from "../api";
+import { FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type DataLevel, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card, CardHeader } from "../components/Card";
 import { BlockSkeleton } from "../components/Skeleton";
@@ -74,11 +74,11 @@ const FLOWS: readonly Flow[] = [
   },
   {
     name: "AI model (only when you ask)",
-    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio weights and % changes; with full detail also your " + FULL_DETAIL_ITEMS + ".",
+    sends: "your question, your AI analyst rules, persona and investing preferences (including your country, if set), and portfolio " + RELATIVE_ITEMS + "; with full detail also your " + FULL_DETAIL_ITEMS + ".",
     gets: "the answer and the sources it used.",
     linkable: "account",
     linkNote: "Yes: the provider knows the account you connected (Claude login or API key) and can link every question to it. A local model stays on your network.",
-    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase history, where you hold what and your holding notes (free text).",
+    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase and sale history, where you hold what and your holding notes (free text).",
   },
   {
     name: "npm (once)",
@@ -101,7 +101,7 @@ export function PrivacyPage() {
         <CardHeader id="flows-h" title="What leaves this server" />
         <p className="sub">
           To fetch prices, news and answers, the server sends requests out. For each service: what goes out, what comes back, whether it can be tied to
-          you, and what it reveals. Everything else — holdings, purchases, amounts, the database and your account — stays on this server.
+          you, and what it reveals. Everything else — holdings, transactions, amounts, the database and your account — stays on this server.
         </p>
         <ul className="flow-list">
           {FLOWS.map((f) => (
@@ -152,7 +152,7 @@ function AiSharing() {
     <Card as="section" id="ai" aria-labelledby="ai-share-h">
       <CardHeader id="ai-share-h" title="What the AI analyst may see" />
       <p className="sub">
-        Set per connected model. Relative figures are weights and percentage changes only. Full detail adds your {FULL_DETAIL_ITEMS}.
+        Set per connected model. Relative figures are {RELATIVE_ITEMS} only. Full detail adds your {FULL_DETAIL_ITEMS}.
         A local model keeps everything on your network.
       </p>
       {providers.loading && !providers.data ? (

@@ -382,6 +382,24 @@ class ContextPrivacyTests(TempDb):
         for shown in ("777", "1234567", "2025-03-03", '"platform": "Revolut"'):
             self.assertIn(shown, full)
 
+    def test_sales_side_and_realized_pl_are_full_detail_only_closed_is_both(self):
+        db.upsert_instrument({"instrument_id": "DEMO", "name": "Demo ETF", "asset_type": "etf", "currency": "EUR"})
+        db.add_lots([{"instrument_id": "DEMO", "buy_date": "2025-03-03", "quantity": 777, "unit_price": 12.1},
+                     {"instrument_id": "DEMO", "buy_date": "2025-04-03", "quantity": 100, "unit_price": 14.9, "side": "sell"}])
+        snap = self.snapshot()
+        snap["rows"][0].update(realized_base=4321.5, closed=False)
+        full = advisor.build_context(snap, "full")
+        holding = full["portfolio"]["holdings"][0]
+        self.assertEqual([p["side"] for p in holding["purchases"]], ["buy", "sell"])
+        self.assertEqual((holding["realized_base"], holding["closed"]), (4321.5, False))
+        rel = advisor.build_context(snap, "relative")
+        self.assertEqual(rel["portfolio"]["holdings"][0]["closed"], False)         # closed travels at both levels
+        text = advisor.render_context(rel)
+        for secret in ("4321", "purchases", "realized_base", '"side"', "14.9"):
+            self.assertNotIn(secret, text)
+        snap["rows"][0]["closed"] = True
+        self.assertTrue(advisor.build_context(snap, "relative")["portfolio"]["holdings"][0]["closed"])
+
     def test_ask_uses_provider_level_and_reports_what_was_shared(self):
         captured = {}
 

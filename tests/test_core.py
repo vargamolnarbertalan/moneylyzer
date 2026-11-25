@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 
 from analyzer import db, market
-from analyzer.engine import summarize_position
+from analyzer.engine import fifo_shortfall, realized_by_sale, summarize_position, units_text
 from analyzer.validation import validate_lots
 
 
@@ -111,6 +111,96 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("Add purchases", out["check"])
 
 
+class SellTests(unittest.TestCase):
+    """FIFO: sales use up the oldest buys first; realized P/L = proceeds - the cost of those units."""
+    usd = {"currency": "USD", "quantity": 0, "avg_cost": None, "price_divisor": 1}
+    rates = {"2025-01-10": 300.0, "2025-02-10": 350.0, "2025-03-01": 360.0, "2025-04-01": 400.0}
+
+    def rate_on(self, ccy, day):
+        return self.rates.get(day) if ccy == "USD" else None
+
+    def lots(self):
+        # given out of order on purpose: the replay sorts by date
+        return [
+            {"lot_id": 4, "side": "sell", "buy_date": "2025-04-01", "quantity": 12, "unit_price": 0.0,
+             "paid_amount": 2100.0, "paid_currency": "USD"},            # 2100 USD received, net of fees
+            {"lot_id": 2, "side": "buy", "buy_date": "2025-02-10", "quantity": 10, "unit_price": 120.0,
+             "paid_amount": 1250.0, "paid_currency": "USD"},            # 1250 USD paid with fees
+            {"lot_id": 1, "buy_date": "2025-01-10", "quantity": 10, "unit_price": 100.0},   # no side = a buy
+            {"lot_id": 3, "side": "sell", "buy_date": "2025-03-01", "quantity": 4, "unit_price": 150.0},
+        ]
+
+    def test_partial_sale_then_a_sale_spanning_both_buys(self):
+        out = summarize_position(self.usd, self.lots(), 150.0, "USD", {"USD": 380.0}, self.rate_on)
+        # 4 units from the first buy, then 6 left there + 6 from the second: 4 units of the second stay
+        self.assertAlmostEqual(out["quantity"], 4)
+        self.assertAlmostEqual(out["avg_cost"], 120.0)                      # the open buy's unit price
+        self.assertAlmostEqual(out["cost_base"], 1250.0 * 350.0 * 0.4)      # pro rata of what was paid, at that day's rate
+        sale1 = 4 * 150.0 * 360.0 - 4 * 100.0 * 300.0
+        sale2 = 2100.0 * 400.0 - (6 * 100.0 * 300.0 + 1250.0 * 350.0 * 0.6)
+        self.assertAlmostEqual(out["realized_base"], sale1 + sale2)
+        self.assertEqual((out["sells"], out["closed"], out["check"]), (2, False, ""))
+        self.assertAlmostEqual(out["value_base"], 4 * 150.0 * 380.0)
+        self.assertAlmostEqual(out["pnl_base"], out["value_base"] - out["cost_base"])
+        per_sale = realized_by_sale(self.usd, self.lots(), self.rate_on, "HUF")
+        self.assertAlmostEqual(per_sale[3], sale1)
+        self.assertAlmostEqual(per_sale[4], sale2)
+
+    def test_same_date_uses_the_lower_lot_id_first(self):
+        lots = [{"lot_id": 2, "side": "sell", "buy_date": "2025-01-10", "quantity": 1, "unit_price": 10.0},
+                {"lot_id": 1, "buy_date": "2025-01-10", "quantity": 1, "unit_price": 10.0}]
+        self.assertIsNone(fifo_shortfall(lots))
+        self.assertIsNotNone(fifo_shortfall([dict(lots[0], lot_id=0), dict(lots[1], lot_id=5)]))  # the sale first: nothing held yet
+
+    def test_selling_everything_closes_the_holding(self):
+        lots = [{"buy_date": "2025-01-10", "quantity": 2, "unit_price": 100.0},
+                {"buy_date": "2025-03-01", "quantity": 2, "side": "sell", "unit_price": 150.0}]
+        out = summarize_position(self.usd, lots, None, None, {}, self.rate_on)
+        self.assertEqual((out["quantity"], out["closed"], out["value"], out["value_base"]), (0.0, True, 0.0, 0.0))
+        self.assertIsNone(out["avg_cost"])
+        self.assertAlmostEqual(out["realized_base"], 2 * 150.0 * 360.0 - 2 * 100.0 * 300.0)
+        self.assertEqual(out["check"], "")                                   # no "No price yet" for a closed holding
+
+    def test_a_sale_larger_than_the_units_held_is_unknown_not_a_crash(self):
+        lots = [{"buy_date": "2025-01-10", "quantity": 3, "unit_price": 100.0},
+                {"buy_date": "2025-04-01", "quantity": 5, "side": "sell", "unit_price": 150.0}]
+        out = summarize_position(self.usd, lots, 150.0, "USD", {"USD": 380.0}, self.rate_on)
+        self.assertIsNone(out["realized_base"])                              # never 0
+        self.assertEqual((out["quantity"], out["closed"]), (0.0, True))      # the excess is not a short position
+        self.assertIn("Sale on 2025-04-01 is larger than the 3 units held then", out["check"])
+        self.assertEqual(fifo_shortfall(lots)["held"], 3)
+
+    def test_unknown_pieces_make_realized_unknown(self):
+        lots = [{"buy_date": "2025-01-10", "quantity": 2, "unit_price": 100.0},
+                {"buy_date": "2025-03-01", "quantity": 1, "side": "sell", "unit_price": 150.0}]
+        no_rate = summarize_position(self.usd, lots, 150.0, "USD", {"USD": 380.0}, lambda c, d: None)
+        self.assertIsNone(no_rate["realized_base"])
+        self.assertIn("USD/HUF rate missing for a sale date: realized P/L unknown", no_rate["check"])
+        free_buy = [dict(lots[0], unit_price=0.0), lots[1]]
+        out = summarize_position(self.usd, free_buy, 150.0, "USD", {"USD": 380.0}, self.rate_on)
+        self.assertIsNone(out["realized_base"])
+        self.assertIn("purchase that was sold has no unit price", out["check"])
+        no_sale_price = [lots[0], dict(lots[1], unit_price=0.0)]
+        out = summarize_position(self.usd, no_sale_price, 150.0, "USD", {"USD": 380.0}, self.rate_on)
+        self.assertIn("1 sale(s) without unit price or amount received", out["check"])
+        self.assertAlmostEqual(out["cost_base"], 1 * 100.0 * 300.0)          # the open unit is still valued
+
+    def test_units_are_written_in_fixed_notation(self):
+        self.assertEqual(units_text(1500000), "1500000 units")
+        self.assertEqual(units_text(1234.5678), "1234.5678 units")
+        self.assertEqual(units_text(0.123456789), "0.12345679 units")
+        self.assertEqual((units_text(1), units_text(0), units_text(-0.0), units_text(3)), ("1 unit", "0 units", "0 units", "3 units"))
+        item = dict(self.usd, quantity=2000000)
+        out = summarize_position(item, [{"buy_date": "2025-01-10", "quantity": 1500000, "unit_price": 100.0}], 150.0, "USD",
+                                 {"USD": 380.0}, self.rate_on)
+        self.assertIn("Transactions total 1500000 units but the holding row says 2000000;", out["check"])
+
+    def test_no_sales_means_zero_realized(self):
+        out = summarize_position(self.usd, [{"buy_date": "2025-01-10", "quantity": 1, "unit_price": 100.0}], 150.0, "USD",
+                                 {"USD": 380.0}, self.rate_on)
+        self.assertEqual((out["realized_base"], out["sells"], out["closed"]), (0.0, 0, False))
+
+
 class LotsValidationTests(unittest.TestCase):
     def frame(self, **kw):
         row = {"instrument_id": "TKO", "buy_date": "2025-03-04", "quantity": "2", "unit_price": "120.5", "paid_amount": "", "paid_currency": "", "notes": ""}
@@ -133,6 +223,15 @@ class LotsValidationTests(unittest.TestCase):
             validate_lots(self.frame(buy_date=""), {"TKO"})
         with self.assertRaisesRegex(ValueError, "finite"):
             validate_lots(self.frame(quantity="inf"), {"TKO"})
+
+    def test_side_is_optional_case_insensitive_and_checked(self):
+        self.assertEqual(validate_lots(self.frame(), {"TKO"})[0]["side"], "buy")                  # no column
+        self.assertEqual(validate_lots(self.frame(side=""), {"TKO"})[0]["side"], "buy")           # empty = buy
+        self.assertEqual(validate_lots(self.frame(side=" SELL "), {"TKO"})[0]["side"], "sell")
+        with self.assertRaisesRegex(ValueError, "line 2: side must be buy or sell"):
+            validate_lots(self.frame(side="hold"), {"TKO"})
+        with self.assertRaisesRegex(ValueError, "what you received"):                              # a sale without price or amount
+            validate_lots(self.frame(side="sell", unit_price="", paid_amount=""), {"TKO"})
 
 
 class ShortWindowHistoryTests(TempDb):
@@ -257,6 +356,131 @@ class AddLotsTests(TempDb):
         with self.assertRaises(sqlite3.IntegrityError):  # unknown instrument -> whole batch rejected
             db.add_lots([dict(lot, quantity=9), dict(lot, instrument_id="NOPE")])
         self.assertEqual(db.count_lots("TKO"), 2)
+
+
+class SellStorageTests(TempDb):
+    def setUp(self):
+        super().setUp()
+        db.upsert_instrument({"instrument_id": "A", "name": "A", "asset_type": "stock", "currency": "HUF"})
+
+    def lot(self, day, quantity, side="buy", price=100.0, **kw):
+        return {"instrument_id": "A", "buy_date": day, "quantity": quantity, "unit_price": price, "side": side, **kw}
+
+    def test_old_lots_table_gains_side_and_every_row_reads_as_a_buy(self):
+        def run(sql):  # closes the handle: an open one locks the file on Windows
+            conn = sqlite3.connect(db.DB_PATH)
+            try:
+                conn.execute(sql)
+                conn.commit()
+            finally:
+                conn.close()
+        run("ALTER TABLE lots DROP COLUMN side")  # simulate a database from before sells
+        run("INSERT INTO lots(instrument_id, buy_date, quantity, unit_price) VALUES ('A','2025-01-02',1,10)")
+        db.initialize()
+        db.initialize()  # idempotent
+        self.assertEqual(list(db.get_lots()["side"]), ["buy"])
+        self.assertEqual(db.add_lots([self.lot("2025-02-03", 1, "sell")]), (1, 0))
+        self.assertEqual(list(db.get_lots()["side"]), ["buy", "sell"])
+
+    def test_duplicates_include_the_side(self):
+        self.assertEqual(db.add_lots([self.lot("2025-01-02", 2)]), (1, 0))
+        self.assertEqual(db.add_lots([self.lot("2025-01-02", 2, "sell")]), (1, 0))  # same figures, other side: not a duplicate
+        self.assertEqual(db.add_lots([self.lot("2025-01-02", 2, "sell")]), (0, 1))
+
+    def test_a_sale_larger_than_the_units_held_stores_nothing(self):
+        db.add_lots([self.lot("2025-01-02", 3), self.lot("2025-02-01", 2, "sell")])
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            db.add_lots([self.lot("2025-03-01", 1), self.lot("2025-04-03", 5, "sell")])  # holds 1 + 1 = 2
+        self.assertEqual(str(caught.exception), "On 2025-04-03 you held 2 units; a sale can't be larger.")
+        self.assertEqual(caught.exception.row, 1)       # the second row of that call: the CSV line number
+        self.assertEqual(db.count_lots("A"), 2)         # the buy in the same call was rolled back too
+        with self.assertRaises(db.SaleTooLarge) as later:   # fits its own date, but starves the sale after it
+            db.add_lots([self.lot("2025-01-15", 3, "sell")])
+        self.assertIn("your sale on 2025-02-01", str(later.exception))
+        self.assertEqual(db.count_lots("A"), 2)
+
+    def test_a_holding_whose_units_come_from_its_record_cannot_be_sold_from(self):
+        db.upsert_instrument({"instrument_id": "R", "name": "R", "asset_type": "stock", "currency": "HUF", "quantity": 10, "avg_cost": 100})
+        sale = {"instrument_id": "R", "buy_date": "2026-11-01", "quantity": 4, "unit_price": 130.0, "side": "sell"}
+        with self.assertRaises(db.SaleTooLarge) as caught:     # the page shows 10 units: "you held 0" would be wrong
+            db.add_lots([sale])
+        self.assertIsInstance(caught.exception, db.NoPurchases)
+        self.assertEqual(str(caught.exception), "This holding's units come from its holding record. Record its purchases first, then the sale.")
+        self.assertEqual(db.count_lots("R"), 0)
+        self.assertEqual(db.add_lots([dict(sale, side="buy", buy_date="2026-10-01"), sale]), (2, 0))  # a purchase in the same call is enough
+
+    def test_the_blamed_row_is_the_new_sale_that_starves_a_stored_one(self):
+        db.add_lots([self.lot("2025-01-02", 3), self.lot("2025-02-01", 2, "sell")])
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            # row 0 comes after the stored sale and is harmless; row 1 is dated before it and takes its units
+            db.add_lots([self.lot("2025-03-01", 1, "sell"), self.lot("2025-01-15", 2, "sell")])
+        self.assertEqual(caught.exception.row, 1)       # CSV line 3
+        self.assertIn("your sale on 2025-02-01", str(caught.exception))
+        self.assertEqual(db.count_lots("A"), 2)
+
+    def test_import_order_does_not_matter(self):
+        # a newest-first export: the sale is listed above the buy it sells, on the same day
+        self.assertEqual(db.add_lots([self.lot("2025-03-01", 2, "sell", 120), self.lot("2025-03-01", 2, "buy", 100)]), (2, 0))
+        self.assertEqual(list(db.get_lots()["side"]), ["buy", "sell"])   # stored buy first: replays the same as oldest-first
+        # an oversell still blames the row it came from, whatever order the rows were stored in
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            db.add_lots([self.lot("2025-05-01", 5, "sell"), self.lot("2025-04-01", 3), self.lot("2025-04-02", 1)])
+        self.assertEqual((caught.exception.row, str(caught.exception)), (0, "On 2025-05-01 you held 4 units; a sale can't be larger."))
+        self.assertEqual(db.count_lots("A"), 2)
+
+    def test_big_quantities_are_not_written_in_scientific_notation(self):
+        db.upsert_instrument({"instrument_id": "B", "name": "B", "asset_type": "government_bond", "currency": "HUF", "price_divisor": 100})
+        bond = {"instrument_id": "B", "buy_date": "2025-01-02", "quantity": 1500000, "unit_price": 98.5}
+        db.add_lots([bond])
+        with self.assertRaises(db.SaleTooLarge) as caught:
+            db.add_lots([dict(bond, buy_date="2025-06-02", quantity=1500001, side="sell")])
+        self.assertEqual(str(caught.exception), "On 2025-06-02 you held 1500000 units; a sale can't be larger.")
+
+    def test_deleting_a_buy_a_later_sale_needs(self):
+        db.add_lots([self.lot("2025-01-02", 3), self.lot("2025-02-01", 2, "sell")])
+        ids = dict(zip(db.get_lots()["side"], db.get_lots()["lot_id"]))
+        with self.assertRaises(db.LotInUse):
+            db.delete_lot(ids["buy"])
+        db.add_lots([self.lot("2025-01-20", 5)])        # more units than the sale needs: the first buy can go
+        db.delete_lot(ids["buy"])
+        with self.assertRaises(db.LotInUse):            # ...but not the one that is left
+            db.delete_lot(int(db.get_lots().query("side == 'buy'")["lot_id"].iloc[0]))
+        db.delete_lot(ids["sell"])
+        db.delete_lot(int(db.get_lots()["lot_id"].iloc[0]))
+        self.assertEqual(db.count_lots("A"), 0)
+
+    def test_value_history_after_a_sale_shows_the_lower_quantity(self):
+        from analyzer import portfolio
+        today = pd.Timestamp("2026-11-24")
+        db.save_prices("A", pd.DataFrame({"date": pd.bdate_range("2026-10-01", "2026-11-23"), "close": 100.0, "currency": "HUF"}), "test")
+        db.add_lots([self.lot("2026-10-26", 10), self.lot("2026-11-09", 4, "sell")])
+        with mock.patch.object(portfolio, "_today", return_value=today):
+            values = {p["date"]: p["value"] for p in portfolio.value_history(31, "HUF")["points"]}
+        self.assertEqual(values["2026-11-06"], 1000.0)
+        self.assertEqual(values["2026-11-09"], 600.0)   # from the sale date on
+        self.assertEqual(values["2026-11-24"], 600.0)
+
+    def test_closed_holding_is_out_of_value_and_weights_but_its_realized_pl_counts(self):
+        from analyzer import portfolio
+        db.upsert_instrument({"instrument_id": "B", "name": "B", "asset_type": "stock", "currency": "HUF"})
+        db.save_prices("B", pd.DataFrame({"date": pd.to_datetime(["2026-11-20", "2026-11-23"]), "close": [90.0, 100.0],
+                                          "currency": "HUF"}), "test")
+        db.add_lots([self.lot("2025-01-10", 2), self.lot("2025-03-01", 2, "sell", price=150.0),   # A: bought and sold: +100
+                     {"instrument_id": "B", "buy_date": "2025-01-10", "quantity": 3, "unit_price": 80.0}])
+        snap = portfolio.build_snapshot({}, {}, "HUF")
+        rows = {r["id"]: r for r in snap["rows"]}
+        self.assertEqual((rows["A"]["closed"], rows["A"]["quantity"], rows["A"]["value_base"], rows["A"]["weight"]),
+                         (True, 0.0, 0.0, None))
+        self.assertEqual((rows["A"]["check"], rows["A"]["sells"]), ("", 1))     # no "No price yet" for a closed holding
+        self.assertAlmostEqual(rows["A"]["realized_base"], 100.0)
+        self.assertEqual((rows["B"]["closed"], rows["B"]["weight"], rows["B"]["realized_base"]), (False, 1.0, 0.0))
+        t = snap["totals"]
+        self.assertEqual((t["value_base"], t["holdings"], t["closed"], t["valued"]), (300.0, 1, 1, 1))
+        self.assertAlmostEqual(t["realized_base"], 100.0)
+        self.assertAlmostEqual(t["pnl_base"], 60.0)                              # B only: 3 x (100 - 80)
+        db.add_lots([{"instrument_id": "B", "buy_date": "2025-05-01", "quantity": 1, "side": "sell", "unit_price": 0.0,
+                      "paid_amount": None}])                                      # a sale with nothing to value it by
+        self.assertIsNone(portfolio.build_snapshot({}, {}, "HUF")["totals"]["realized_base"])   # unknown, not a partial sum
 
 
 class LotPaymentMigrationTests(unittest.TestCase):

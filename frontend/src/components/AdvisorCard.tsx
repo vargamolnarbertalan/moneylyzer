@@ -1,5 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
 import { QUICK_PROMPTS, queueQuestion } from "../advisor";
+import { RELATIVE_ITEMS } from "../api";
 import { ShieldCheck, Sparkles } from "lucide-react";
 import { Link, navigate } from "../router";
 import { AiMark } from "./AiMark";
@@ -57,7 +58,7 @@ export function AdvisorCard({ className }: { className?: string }) {
         ))}
       </div>
       <div className="ai-foot">
-        <p className="note">Shares weights and % changes only, unless you turned on full detail for a model in Data &amp; privacy. Not investment advice.</p>
+        <p className="note">Shares {RELATIVE_ITEMS} only, unless you turned on full detail for a model in Data &amp; privacy. Not investment advice.</p>
         <Link className="link-btn" to="/privacy">
           <ShieldCheck aria-hidden="true" />
           Data &amp; privacy

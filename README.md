@@ -23,16 +23,18 @@ It is **not** a broker connection, a trading tool or financial advice.
   see the change between them. Allocation as bars, a treemap or a donut.
 - **Any display currency**: holdings in EUR, USD, HUF or anything Yahoo quotes are converted at each
   day's exchange rate, so history and P/L are right in the currency you pick.
-- **Purchases**: record each buy (date, units, price, optionally what you actually paid and where).
-  P/L then matches your broker; the add-holding wizard looks up tickers and ISINs for you.
+- **Transactions**: record each buy and sell (date, units, price, optionally what you actually paid or
+  received and where). P/L then matches your broker; sales use up the oldest buys first (FIFO), giving
+  a realized P/L per sale and per holding next to the unrealized one, and a holding you sold completely
+  becomes "Closed". The add-holding wizard looks up tickers and ISINs for you.
 - **Analysis per holding**: returns, drawdown, volatility, RSI, moving averages, a transparent
   price-trend signal and historical scenario ranges (clearly labelled: not predictions).
 - **Markets**: indices, rates, gold, oil, currencies and crypto for context, plus recent news about
   what you hold.
 - **AI analyst** (optional): ask about your portfolio, a holding or the markets. Connect your Claude
   subscription, an API key (Claude, OpenAI, Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI) or a
-  local model (Ollama, LM Studio, llama.cpp). By default a model sees only weights and percentage
-  changes; you can allow full detail per model. Your own standing rules and persona shape every answer.
+  local model (Ollama, LM Studio, llama.cpp). By default a model sees only weights, percentage
+  changes and whether a holding is sold out; you can allow full detail per model. Your own standing rules and persona shape every answer.
 - **Data & privacy page**: every request the server makes, what it sends, whether it can be tied to
   you and what it reveals.
 - **Works on your phone**: responsive down to phone width with a bottom tab bar; dark and light
@@ -72,21 +74,23 @@ port line to `"127.0.0.1:8080:8080"`.
 
 ## Importing CSV files
 
-Import in this order: holdings first, then purchases and price history, which refer to holdings by
+Import in this order: holdings first, then transactions and price history, which refer to holdings by
 `instrument_id`. Each card on the **Import** page offers a template.
 
 | File | First line |
 |---|---|
 | Holdings | `instrument_id,name,asset_type,quantity,avg_cost,currency,market_symbol,price_divisor,notes` |
-| Purchases | `instrument_id,buy_date,quantity,unit_price,paid_amount,paid_currency,platform,notes` |
+| Transactions | `instrument_id,buy_date,side,quantity,unit_price,paid_amount,paid_currency,platform,notes` |
 | Price history | `instrument_id,date,close,currency` |
 
 - `asset_type`: `stock`, `etf`, `mutual_fund`, `government_bond` or `commodity`.
 - `market_symbol`: a Yahoo ticker (`VWCE.DE`, `AAPL`, `GC=F`) or `fund:<ISIN>` for Hungarian funds
   (priced from OTP Alapkezelő, falling back to BAMOSZ). Price history is for holdings no source covers.
 - `price_divisor`: `1`, or `100` for bonds quoted per 100 nominal.
-- Purchases: `buy_date` as `YYYY-MM-DD`; `paid_amount`/`paid_currency` (fees included) make P/L match
-  your broker exactly. Importing the same file twice skips exact duplicates.
+- Transactions: `buy_date` (the trade date) as `YYYY-MM-DD`; `side` is `buy` or `sell` (empty means
+  buy, so older files still work); `paid_amount`/`paid_currency` (fees included for a buy, net of fees
+  for a sell) make P/L match your broker exactly. A sale larger than the units held on its date is
+  refused with its line number. Importing the same file twice skips exact duplicates.
 
 ## What leaves your computer
 
@@ -95,8 +99,9 @@ The **Data & privacy** page in the app lists every outgoing request in detail. I
 - Ticker symbols and currency pairs go to Yahoo Finance (prices every 60 s, history daily, news hourly,
   and what you type in the add-holding search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
 - Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
-  persona and investing preferences, and weights and percentage changes. Amounts, quantities, costs,
-  purchase dates, platforms and holding notes are sent only to a model you set to full detail.
+  persona and investing preferences, and weights, percentage changes and whether a holding is sold out.
+  Amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes are
+  sent only to a model you set to full detail.
 - Never sent anywhere: the database, your account, your CSV files. The app has no telemetry.
 
 ## Your data and backups
@@ -105,6 +110,10 @@ Everything lives in the `lia-data` Docker volume: the database, your app account
 and keys. **Settings → Your data → Download database backup** gives you a consistent copy. Unknown
 values are never shown as 0: a holding without a price or exchange rate is flagged and left out of
 the total.
+
+**Before upgrading to the version with sells, download a backup.** The database is migrated in place:
+every earlier row becomes a buy. An older version knows nothing about sells, so if you go back to it
+after recording a sale, it reads that sale as a purchase.
 
 ## Configuration
 
@@ -134,7 +143,7 @@ used for the screenshots). `requirements.lock` pins the exact versions the image
 ## Limitations
 
 - No exchange rate is guessed: a holding without a rate is left out of the total and flagged.
-- Sales are not modelled yet: after selling, delete or adjust the purchases.
+- Realized P/L is first in, first out, with each amount converted at its own day's exchange rate.
 - Yahoo quotes for some exchanges are delayed (~15 min); Hungarian fund prices arrive 1–2 business days late.
 - Signals are price-trend heuristics only: no fundamentals, valuation, taxes or advice.
 

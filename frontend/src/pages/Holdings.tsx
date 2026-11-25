@@ -125,7 +125,7 @@ export function HoldingsPage() {
     }
   };
 
-  // Quantity and average cost as the portfolio counts them: from the purchases when there are
+  // Quantity and average cost as the portfolio counts them: from the transactions when there are
   // any (the live snapshot), else the holding record's own figures.
   const live = useLive();
   const rowsById = useMemo(() => new Map((live.snapshot?.rows ?? []).map((r) => [r.id, r])), [live.snapshot]);
@@ -183,7 +183,17 @@ export function HoldingsPage() {
       className: "c-name",
       // The name is the row's one link; its overlay makes the whole row open the holding (rowHref).
       link: true,
-      cell: (i) => <span className="name-link">{i.name}</span>,
+      cell: (i) => (
+        <>
+          <span className="name-link">{i.name}</span>
+          {/* everything bought has been sold: kept for its realized P/L, out of the portfolio's value */}
+          {rowsById.get(i.instrument_id)?.closed && (
+            <span className="badge" style={{ marginLeft: 8 }}>
+              Closed
+            </span>
+          )}
+        </>
+      ),
     },
     { key: "type", header: "Type", sortKey: "type", cell: (i) => typeLabel(i.asset_type) },
     { key: "quantity", header: "Quantity", sortKey: "quantity", align: "right", cell: (i) => (pending ? "…" : qty(qtyOf(i))) },
