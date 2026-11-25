@@ -1,7 +1,8 @@
 import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { Check, ChevronDown, Copy, Download, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Download, ExternalLink, History, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { RecentConversations } from "../components/ai/RecentConversations";
 import { AI_ANSWER_NOTE } from "../legal";
-import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, conversationMarkdown, historyBefore, loadChat, memoryStart, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
+import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, conversationMarkdown, freshChat, historyBefore, loadChat, memoryStart, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
 import { copyText, downloadText } from "../clipboard";
 import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type Provider } from "../api";
 import { effortPhrase } from "../effort";
@@ -33,6 +34,8 @@ export function AdvisorPage() {
   const mounted = useRef(false);
   const busy = useRef(false);
   const [allPrompts, setAllPrompts] = useState(false);
+  const [recent, setRecent] = useState(false);
+  const recentBtn = useRef<HTMLButtonElement | null>(null);
   const prompts = allPrompts ? QUICK_PROMPTS : QUICK_PROMPTS.slice(0, QUICK_PROMPTS_SHOWN);
   const hiddenPrompts = QUICK_PROMPTS.length - QUICK_PROMPTS_SHOWN;
 
@@ -66,10 +69,12 @@ export function AdvisorPage() {
   }, [chat.messages.length, waiting, failure]);
 
   const run = useCallback(
-    async (question: string, before: ChatMessage[], holding: string | null) => {
+    async (question: string, before: ChatMessage[], holding: string | null, turnId: string) => {
       busy.current = true;
       setWaiting(true);
       setFailure(null);
+      setRecent(false); // nothing may switch or delete the conversation while its answer is on the way
+      const started = chatRef.current.conversationId;
       try {
         const body: Parameters<typeof endpoints.ask>[0] = { question, history: historyBefore(before, before.length) };
         const level = conversationLevel(before);
@@ -78,8 +83,11 @@ export function AdvisorPage() {
         if (pid) body.provider_id = pid;
         const shown = effortRef.current;
         if (shown) body.effort = shown;
+        body.conversation_id = started; // the server saves the answer there (Recent)
+        body.turn_id = turnId; // a retry replaces the saved answer instead of adding the question twice
         if (holding) body.instrument_id = holding;
         const res = await endpoints.ask(body);
+        if (chatRef.current.conversationId !== started) return; // another conversation is on screen now
         setChat((c) => ({
           ...c,
           providerId: c.providerId ?? res.provider.id, // later questions go to the model that answered, not a new default
@@ -103,10 +111,17 @@ export function AdvisorPage() {
     (text: string, holding: string | null = holdingId) => {
       const question = text.trim().slice(0, MAX_QUESTION);
       if (!question || busy.current) return;
+      if (orphanedRef.current) {
+        // a reopened conversation whose model was removed is read-only: a new question starts a new one
+        clearChat();
+        chatRef.current = freshChat(null);
+        setChat(chatRef.current);
+      }
       const before = chatRef.current.messages;
-      setChat((c) => ({ ...c, messages: [...c.messages, { id: newId(), role: "user", content: question }] }));
+      const turnId = newId();
+      setChat((c) => ({ ...c, messages: [...c.messages, { id: turnId, role: "user", content: question }] }));
       setDraft("");
-      void run(question, before, holding);
+      void run(question, before, holding, turnId);
     },
     [run, holdingId],
   );
@@ -115,7 +130,7 @@ export function AdvisorPage() {
     const msgs = chatRef.current.messages;
     const last = msgs[msgs.length - 1];
     if (!last || last.role !== "user" || busy.current) return;
-    void run(last.content, msgs.slice(0, -1), holdingId);
+    void run(last.content, msgs.slice(0, -1), holdingId, last.id);
   };
 
   // A question handed over from the Overview card is sent as soon as the page opens.
@@ -139,7 +154,7 @@ export function AdvisorPage() {
 
   const newConversation = () => {
     clearChat();
-    setChat((c) => ({ providerId: selected?.id ?? null, effort: c.providerId === selected?.id ? (c.effort ?? null) : null, messages: [] }));
+    setChat((c) => freshChat(selected?.id ?? null, c.providerId === selected?.id ? (c.effort ?? null) : null));
     setFailure(null);
     setStale(false);
     setDraft("");
@@ -151,6 +166,11 @@ export function AdvisorPage() {
   // Only the last MAX_HISTORY messages go with the next question: mark where the analyst's memory begins.
   const forgotten = memoryStart(chat.messages);
   const lastIsUser = chat.messages[chat.messages.length - 1]?.role === "user";
+  // A reopened conversation whose model was deleted: readable, but it can't go on with another model.
+  const orphaned = !empty && !!chat.providerId && list.length > 0 && !list.some((p) => p.id === chat.providerId);
+  const orphanedRef = useRef(orphaned);
+  orphanedRef.current = orphaned;
+  const newConvBtn = useRef<HTMLButtonElement | null>(null);
 
   return (
     <div className="advisor-layout">
@@ -184,13 +204,48 @@ export function AdvisorPage() {
                 Export
               </button>
             )}
+            <button ref={recentBtn} type="button" className="btn ghost small" aria-expanded={recent} onClick={() => setRecent((v) => !v)} disabled={waiting}>
+              <History aria-hidden="true" />
+              Recent
+            </button>
             {!empty && (
-              <button type="button" className="btn ghost small" onClick={newConversation} disabled={waiting}>
+              <button ref={newConvBtn} type="button" className="btn ghost small" onClick={newConversation} disabled={waiting}>
                 New conversation
               </button>
             )}
           </div>
         </div>
+        {recent && (
+          <RecentConversations
+            currentId={chat.conversationId}
+            disabled={waiting}
+            onClose={() => {
+              setRecent(false);
+              recentBtn.current?.focus();
+            }}
+            onOpen={(c) => {
+              // read it, export it, or continue it with the model it was written with
+              setChat({
+                conversationId: c.id,
+                providerId: c.provider_id ?? null,
+                effort: null,
+                messages: c.messages.map((m) => ({ id: m.id, role: m.role, content: m.content, meta: m.meta })),
+              });
+              setFailure(null);
+              setStale(false);
+              setRecent(false);
+              // its model removed: the message box is off, so focus goes to New conversation instead
+              const readOnly = !!c.provider_id && list.length > 0 && !list.some((p) => p.id === c.provider_id);
+              requestAnimationFrame(() => (readOnly ? newConvBtn.current : areaRef.current)?.focus());
+            }}
+            onCurrentDeleted={newConversation}
+          />
+        )}
+        {orphaned && (
+          <Alert tone="info">
+            The model this conversation used has been removed. You can read and export it; start a new conversation to ask more.
+          </Alert>
+        )}
         {providers.error && !providers.data && <Alert tone="err">Could not load the models: {providers.error}</Alert>}
 
         <div className="chips" role="group" aria-label="Quick questions">
@@ -237,7 +292,8 @@ export function AdvisorPage() {
           </div>
         )}
 
-        <div className="chat-log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions">
+        {/* keyed per conversation: opening a saved one replaces the region instead of announcing every message */}
+        <div key={chat.conversationId} className="chat-log" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions">
           {empty && !waiting && (
             <div className="empty">
               <b>Ask about your portfolio, a holding or the markets</b>
@@ -287,7 +343,7 @@ export function AdvisorPage() {
             value={draft}
             maxLength={MAX_QUESTION}
             placeholder="Ask the AI analyst…  (Enter sends, Shift+Enter adds a line)"
-            disabled={waiting}
+            disabled={waiting || orphaned}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKey}
           />
@@ -297,18 +353,18 @@ export function AdvisorPage() {
               chat={chat}
               list={list}
               loading={providers.loading}
-              disabled={waiting}
+              disabled={waiting || orphaned /* read-only: its model was removed; New conversation picks another */}
               onModel={(v) => {
                 // another model starts a new conversation: earlier answers stay with the model (and the
                 // sharing level) they were written for
                 clearChat();
-                setChat({ providerId: v, messages: [] });
+                setChat(freshChat(v));
                 setFailure(null);
                 setStale(false);
               }}
               onEffort={(v) => setChat((c) => withEffort(c, selected, v))}
             />
-            <button type="submit" className="btn send-btn" disabled={waiting || !draft.trim() || !selected}>
+            <button type="submit" className="btn send-btn" disabled={waiting || !draft.trim() || !selected || orphaned}>
               {waiting && <span className="spinner" aria-hidden="true" />}
               {waiting ? "Waiting…" : "Send"}
             </button>

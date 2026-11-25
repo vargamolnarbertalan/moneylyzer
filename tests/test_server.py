@@ -72,6 +72,30 @@ class ApiTests(unittest.TestCase):
         r = self.client.post("/api/auth/setup", json={"username": "owner", "password": "correct horse 1", "code": code}, headers=H)
         self.assertEqual(r.status_code, 200, r.text)
 
+    def test_saved_conversation_endpoints(self):
+        self.setup_account()
+        from analyzer import advisor
+        advisor.save_turn("conv-api-01", "claude-login", "Hello?", {"text": "Hi", "model": "m", "sources": []})
+        listed = self.client.get("/api/advisor/conversations").json()
+        self.assertEqual([c["id"] for c in listed], ["conv-api-01"])
+        self.assertNotIn("messages", listed[0])
+        self.assertEqual(len(self.client.get("/api/advisor/conversations/conv-api-01").json()["messages"]), 2)
+        self.assertEqual(self.client.get("/api/advisor/conversations/conv-nope-1").status_code, 404)
+        self.assertEqual(self.client.get("/api/advisor/conversations/bad!id").status_code, 422)
+        self.assertEqual(self.client.delete("/api/advisor/conversations/conv-api-01").status_code, 403)  # CSRF header
+        self.assertEqual(self.client.delete("/api/advisor/conversations/conv-api-01", headers=H).json(), {"ok": True})
+        self.assertEqual(self.client.delete("/api/advisor/conversations/conv-api-01", headers=H).status_code, 404)
+        advisor.save_turn("conv-api-02", "claude-login", "Again", {"text": "x", "model": "m", "sources": []})
+        self.assertEqual(self.client.delete("/api/advisor/conversations", headers=H).json(), {"deleted": 1})
+        r = self.client.post("/api/advisor/ask", headers=H, json={"question": "q", "conversation_id": "x"})
+        self.assertEqual(r.status_code, 422)  # too short an id
+        self.assertEqual(self.client.delete("/api/advisor/conversations").status_code, 403)  # Delete all needs CSRF too
+        # a failing save never costs the answer
+        with mock.patch("analyzer.advisor.complete", return_value={"text": "kept", "model": "m", "sources": []}), \
+                mock.patch("analyzer.advisor.save_turn", side_effect=RuntimeError("disk full")):
+            r = self.client.post("/api/advisor/ask", headers=H, json={"question": "q", "conversation_id": "conv-api-03"})
+        self.assertEqual((r.status_code, r.json()["text"]), (200, "kept"))
+
     def test_ask_passes_the_chat_effort(self):
         self.setup_account()
         answer = {"text": "ok", "model": "m", "sources": [], "provider": {}, "effort": "max", "shared": {}}
