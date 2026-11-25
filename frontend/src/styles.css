@@ -1490,6 +1490,21 @@ a.chip-link:hover {
 .id-chip:hover {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+/* Holdings: the whole row opens the holding (the name's stretched .row-link); Edit and Delete sit above
+   that overlay so they keep working on their own. */
+.dt-hold .dt tbody tr:not(.dt-extra):not(.dt-empty) {
+  position: relative;
+}
+.dt-hold .dt tbody tr:not(.dt-extra):not(.dt-empty):hover {
+  background: var(--chip);
+}
+.dt-hold .dt tbody tr:hover .name-link {
+  color: var(--accent);
+}
+.dt-hold .acts-in {
+  position: relative;
+  z-index: 1;
+}
 .btn svg {
   width: 16px;
   height: 16px;

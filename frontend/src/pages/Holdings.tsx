@@ -173,9 +173,7 @@ export function HoldingsPage() {
       header: "ID",
       sortKey: "id",
       cell: (i) => (
-        <Link className="id-chip" to={`/holding/${encodeURIComponent(i.instrument_id)}`} aria-label={`${i.instrument_id}: open details`}>
-          {i.instrument_id}
-        </Link>
+        <span className="id-chip">{i.instrument_id}</span>
       ),
     },
     {
@@ -183,11 +181,9 @@ export function HoldingsPage() {
       header: "Name",
       sortKey: "name",
       className: "c-name",
-      cell: (i) => (
-        <Link className="name-link" to={`/holding/${encodeURIComponent(i.instrument_id)}`}>
-          {i.name}
-        </Link>
-      ),
+      // The name is the row's one link; its overlay makes the whole row open the holding (rowHref).
+      link: true,
+      cell: (i) => <span className="name-link">{i.name}</span>,
     },
     { key: "type", header: "Type", sortKey: "type", cell: (i) => typeLabel(i.asset_type) },
     { key: "quantity", header: "Quantity", sortKey: "quantity", align: "right", cell: (i) => (pending ? "…" : qty(qtyOf(i))) },
@@ -305,6 +301,7 @@ export function HoldingsPage() {
                 sf={sf}
                 columns={columns}
                 rowKey={(i) => i.instrument_id}
+                rowHref={(i) => `/holding/${encodeURIComponent(i.instrument_id)}`}
                 label="holdings"
                 variant="stack"
                 className="dt-hold"
