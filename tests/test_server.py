@@ -72,6 +72,17 @@ class ApiTests(unittest.TestCase):
         r = self.client.post("/api/auth/setup", json={"username": "owner", "password": "correct horse 1", "code": code}, headers=H)
         self.assertEqual(r.status_code, 200, r.text)
 
+    def test_ask_passes_the_chat_effort(self):
+        self.setup_account()
+        answer = {"text": "ok", "model": "m", "sources": [], "provider": {}, "effort": "max", "shared": {}}
+        with mock.patch("server.main.advisor.ask", return_value=answer) as asked:
+            r = self.client.post("/api/advisor/ask", headers=H, json={"question": "q", "effort": "max"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(asked.call_args.kwargs["effort"], "max")
+            self.client.post("/api/advisor/ask", headers=H, json={"question": "q"})
+            self.assertIsNone(asked.call_args.kwargs["effort"])
+            self.assertEqual(self.client.post("/api/advisor/ask", headers=H, json={"question": "q", "effort": "ultra"}).status_code, 422)
+
     def test_model_list_uses_typed_or_saved_key(self):
         self.setup_account()
         pid = self.client.post("/api/ai/providers", headers=H, json={

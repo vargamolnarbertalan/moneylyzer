@@ -1,6 +1,7 @@
 // Advisor conversation helpers: the quick prompts, the sessionStorage-backed conversation, the hand-over
 // from the Overview card, and the history the API wants.
-import type { AdvisorAnswer, ChatTurn, DataLevel } from "./api";
+import type { AdvisorAnswer, ChatTurn, DataLevel, Effort } from "./api";
+import { EFFORTS } from "./effort";
 import { readSession, removeSession, writeSession } from "./storage";
 
 export interface ChatMessage {
@@ -8,13 +9,17 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   /** Only on answers. */
-  meta?: Pick<AdvisorAnswer, "provider" | "model" | "sources" | "shared">;
+  meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared">;
 }
 
 export interface Chat {
   providerId: string | null;
+  /** Effort chosen in this conversation; null means the model's saved effort. Never saved to the model. */
+  effort?: Effort | null;
   messages: ChatMessage[];
 }
+
+const isEffort = (v: unknown): v is Effort => typeof v === "string" && (EFFORTS as readonly string[]).includes(v);
 
 const CHAT_KEY = "lia-advisor-chat";
 const PENDING_KEY = "lia-advisor-pending";
@@ -100,11 +105,11 @@ export function loadChat(): Chat {
   const c = readSession<Chat>(CHAT_KEY);
   if (!c || !Array.isArray(c.messages)) return { providerId: null, messages: [] };
   const messages = c.messages.filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string");
-  return { providerId: typeof c.providerId === "string" ? c.providerId : null, messages };
+  return { providerId: typeof c.providerId === "string" ? c.providerId : null, effort: isEffort(c.effort) ? c.effort : null, messages };
 }
 
 export function saveChat(chat: Chat): void {
-  writeSession(CHAT_KEY, { providerId: chat.providerId, messages: chat.messages.slice(-80) });
+  writeSession(CHAT_KEY, { providerId: chat.providerId, effort: chat.effort ?? null, messages: chat.messages.slice(-80) });
 }
 
 export function clearChat(): void {

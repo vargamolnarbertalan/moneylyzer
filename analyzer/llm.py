@@ -99,6 +99,16 @@ class Provider:
         return self.web_research and self.kind in ("claude_code", "anthropic")
 
 
+def takes_effort(p: Provider) -> bool:
+    """Claude login always passes --effort; the Claude API only for models where effort is documented."""
+    return p.kind == "claude_code" or (p.kind == "anthropic" and p.model in EFFORT_MODELS)
+
+
+def applied_effort(p: Provider) -> str | None:
+    """The effort actually sent for this model ("default" = none sent, the model decides), None if it takes none."""
+    return p.effort if takes_effort(p) else None
+
+
 def validate(p: Provider) -> None:
     if p.kind not in KINDS:
         raise LLMError(f"Unknown provider type: {p.kind}")
@@ -224,7 +234,7 @@ def _anthropic(p: Provider, system: str, messages: list[dict]) -> dict:
     params: dict = {"model": p.model, "max_tokens": MAX_TOKENS,
                     "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                     "messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
-    if p.model in EFFORT_MODELS and p.effort != "default":
+    if applied_effort(p) not in (None, "default"):
         params["output_config"] = {"effort": p.effort}
     if p.model in FALLBACK_MODELS:
         params["betas"] = ["server-side-fallback-2026-07-01"]

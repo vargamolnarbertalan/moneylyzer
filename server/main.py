@@ -708,6 +708,8 @@ class AskBody(BaseModel):
     instrument_id: str | None = Field(default=None, max_length=64)
     # the level the conversation's answers were written at: a model whose level changed meanwhile gets a 409
     expected_level: Literal["relative", "full"] | None = None
+    # this question only (chosen in the chat); the model's saved effort when omitted
+    effort: Literal["default", "low", "medium", "high", "xhigh", "max"] | None = None
 
 
 @app.get("/api/ai/presets")
@@ -826,7 +828,7 @@ async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
         raise HTTPException(404, "No such holding.")
     try:
         result = await asyncio.to_thread(advisor.ask, body.provider_id, body.question, body.history, snapshot,
-                                         body.instrument_id, expected_level=body.expected_level)
+                                         body.instrument_id, expected_level=body.expected_level, effort=body.effort)
     except advisor.LevelChanged as exc:
         raise HTTPException(409, str(exc)) from None
     except KeyError as exc:

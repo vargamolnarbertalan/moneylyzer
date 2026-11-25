@@ -2540,18 +2540,42 @@ input[type="radio"],
   display: flex;
   flex-wrap: wrap;
   gap: 10px 14px;
-  align-items: flex-end;
+  align-items: flex-start; /* a help line under a picker must not move the buttons beside it */
   justify-content: space-between;
+}
+/* Model and effort side by side, tops aligned, so a help line under one never shifts the other's control */
+.chat-pickers {
+  flex: 1 1 400px;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-start;
 }
 .chat-model {
   flex: 1 1 240px;
   max-width: 380px;
+}
+.chat-effort {
+  flex: 0 1 190px;
+  min-width: 150px;
+}
+/* a read-only value where a control would be: lines up with the selects beside it */
+.static-value {
+  min-height: 40px; /* .input's height; 44px on touch widths, below */
+  display: flex;
+  align-items: center;
+  font-size: 13.5px;
+  color: var(--muted);
 }
 .chat-head-side {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
   align-items: center;
+  /* level with the pickers' controls: past their label line (12.5px label + 5px gap), as tall as a select */
+  margin-top: 23px;
+  min-height: 40px;
 }
 .focus-chip {
   display: inline-flex;
@@ -3042,8 +3066,12 @@ a.news-card:hover {
   }
   .field input,
   .field textarea,
-  .input {
+  .input,
+  .static-value {
     min-height: 44px;
+  }
+  .chat-head-side {
+    margin-top: 0;
   }
   .dismiss {
     min-width: 44px;

@@ -3,6 +3,7 @@ import { endpoints, errorMessage, type DataLevel, type Effort, type Preset, type
 import { Alert } from "../Alert";
 import { Link } from "../../router";
 import { Select } from "../Select";
+import { effortOptions } from "../../effort";
 
 export const KIND_LABEL: Record<ProviderKind, string> = {
   claude_code: "Claude login",
@@ -10,15 +11,6 @@ export const KIND_LABEL: Record<ProviderKind, string> = {
   openai_compat: "OpenAI-compatible",
 };
 
-const EFFORTS: readonly Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
-const EFFORT_LABEL: Record<Effort, string> = {
-  default: "Model default",
-  low: "low",
-  medium: "medium",
-  high: "high",
-  xhigh: "xhigh",
-  max: "max",
-};
 const EFFORT_HELP =
   "How long Claude thinks before answering. Higher is slower and uses more of your plan or API budget. Model default sends no setting and leaves it to the model (usually medium on current Claude models).";
 // Claude Code's own aliases (code.claude.com/docs/en/model-config, checked 2026-11-25); each follows the newest version.
@@ -297,7 +289,7 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
               value={effort}
               onValueChange={(v) => setEffort(v as Effort)}
               aria-describedby={describe("effort", id("efforth"))}
-              options={EFFORTS.map((x) => ({ value: x, label: EFFORT_LABEL[x] }))}
+              options={effortOptions()}
             />
             <span id={id("efforth")} className="help">
               {EFFORT_HELP}

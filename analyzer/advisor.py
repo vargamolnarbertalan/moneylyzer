@@ -8,6 +8,7 @@ Privacy: the context is built per provider data level.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 import math
 import uuid
@@ -17,7 +18,7 @@ import pandas as pd
 
 from analyzer import db, research, secrets_store
 from analyzer.engine import analyze_history
-from analyzer.llm import Provider, complete, validate
+from analyzer.llm import Provider, applied_effort, complete, takes_effort, validate
 from analyzer.persona import DEFAULT_PERSONA, compose_system_prompt, normalize_preferences, normalize_rules
 
 BUILTIN_ID = "claude-login"
@@ -79,6 +80,7 @@ def list_providers() -> list[dict]:
             "data_level": p.data_level, "web_research": p.web_research, "effort": p.effort,
             "is_default": bool(r["is_default"]), "builtin": p.id == BUILTIN_ID, "local": p.is_local,
             "key_hint": secrets_store.hint(p.secret_name), "can_browse": p.can_browse,
+            "takes_effort": takes_effort(p),
         })
     return out
 
@@ -286,13 +288,18 @@ def render_context(ctx: dict) -> str:
 
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
-        instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None) -> dict:
+        instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None,
+        effort: str | None = None) -> dict:
+    """`effort` overrides the model's saved effort for this question only (chosen in the chat; never saved)."""
     question = (question or "").strip()
     if not question:
         raise ValueError("Ask a question first.")
     if len(question) > MAX_QUESTION_CHARS:
         raise ValueError(f"Keep the question under {MAX_QUESTION_CHARS} characters.")
     provider = get_provider(provider_id)
+    if effort is not None and takes_effort(provider):  # other models take none: the choice is ignored
+        provider = dataclasses.replace(provider, effort=effort)
+        validate(provider)
     # A conversation with answers must say which level they were written at, and match the model's level
     # (a tab with older code sends none). A new conversation is never refused.
     answered = any(m.get("role") == "assistant" for m in (history or []))
@@ -313,4 +320,5 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
     user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}])
-    return {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind}, "shared": shared}
+    return {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind},
+            "effort": applied_effort(provider), "shared": shared}
