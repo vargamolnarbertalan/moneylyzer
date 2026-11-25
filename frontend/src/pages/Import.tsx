@@ -110,7 +110,7 @@ export function ImportPage() {
   return (
     <div className="stack">
       <p className="sub" style={{ maxWidth: "70ch" }}>
-        Import in this order: holdings first, then purchases and price history, which refer to holdings by <code>instrument_id</code>.
+        Import in this order: holdings first, then transactions and price history, which refer to holdings by <code>instrument_id</code>.
       </p>
       <div className="cards-auto">
         <ImportCard<{ imported: number }>
@@ -124,13 +124,13 @@ export function ImportPage() {
         />
         <ImportCard<{ added: number; skipped_duplicates: number }>
           step={2}
-          title="Purchases CSV"
-          blurb="One row per buy: date, units and price in the holding's currency, optionally what you paid in total (fees included) and the currency you paid in."
+          title="Transactions CSV"
+          blurb="One row per buy or sell: date, units and price in the holding's currency, optionally side (buy or sell; empty means buy), what you paid or received in total (fees included) and the currency it was in. A sale larger than the units held then is refused."
           endpoint="/api/import/lots"
           template="/api/templates/lots.csv"
-          header="instrument_id,buy_date,quantity,unit_price,paid_amount,paid_currency,platform,notes"
+          header="instrument_id,buy_date,side,quantity,unit_price,paid_amount,paid_currency,platform,notes"
           describe={(r) =>
-            `Added ${plural(r.added, "purchase", "purchases")}` +
+            `Added ${plural(r.added, "transaction", "transactions")}` +
             (r.skipped_duplicates > 0 ? `, skipped ${plural(r.skipped_duplicates, "duplicate", "duplicates")}.` : ".")
           }
         />

@@ -78,7 +78,7 @@ const FLOWS: readonly Flow[] = [
     gets: "the answer and the sources it used.",
     linkable: "account",
     linkNote: "Yes: the provider knows the account you connected (Claude login or API key) and can link every question to it. A local model stays on your network.",
-    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase history, where you hold what and your holding notes (free text).",
+    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase and sale history, where you hold what and your holding notes (free text).",
   },
   {
     name: "npm (once)",
@@ -101,7 +101,7 @@ export function PrivacyPage() {
         <CardHeader id="flows-h" title="What leaves this server" />
         <p className="sub">
           To fetch prices, news and answers, the server sends requests out. For each service: what goes out, what comes back, whether it can be tied to
-          you, and what it reveals. Everything else — holdings, purchases, amounts, the database and your account — stays on this server.
+          you, and what it reveals. Everything else — holdings, transactions, amounts, the database and your account — stays on this server.
         </p>
         <ul className="flow-list">
           {FLOWS.map((f) => (

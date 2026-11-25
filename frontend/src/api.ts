@@ -23,7 +23,14 @@ export interface Row {
   pnl_pct: Nullable<number>;
   today_base: Nullable<number>;
   today_pct: Nullable<number>;
+  /** Transactions recorded (buys and sells). */
   lots: number;
+  /** How many of them are sells. */
+  sells: number;
+  /** Profit on the units sold (first in, first out), in the base currency; null when something it needs is unknown. */
+  realized_base: Nullable<number>;
+  /** Everything bought has been sold: no value, no weight; only the realized P/L remains. */
+  closed: boolean;
   spark: number[];
   check: string;
   weight: Nullable<number>;
@@ -35,7 +42,11 @@ export interface Totals {
   pnl_pct: Nullable<number>;
   today_base: Nullable<number>;
   today_pct: Nullable<number>;
+  /** Null as soon as one holding's realized P/L is unknown. */
+  realized_base: Nullable<number>;
+  /** Holdings still held: closed ones are not counted here or in the figures below. */
   holdings: number;
+  closed: number;
   valued: number;
   with_pnl: number;
   with_today: number;
@@ -127,21 +138,30 @@ export interface PricePoint {
   close: number;
 }
 
+export type Side = "buy" | "sell";
+
+/** One transaction: a buy or a sell (the API still calls them lots). */
 export interface Lot {
   lot_id: number;
   instrument_id: string;
+  /** The trade date. */
   buy_date: string;
+  side: Side;
   quantity: number;
   unit_price: number;
+  /** What was paid (buy) or received (sell), fees included, in paid_currency. */
   paid_amount: Nullable<number>;
   paid_currency: Nullable<string>;
   notes: Nullable<string>;
-  /** Broker / app / bank the purchase was made at (free text). */
+  /** Broker / app / bank the transaction was made at (free text). */
   platform?: Nullable<string>;
+  /** Sells only: realized P/L in the base currency; null when unknown (and for buys). */
+  realized_base?: Nullable<number>;
 }
 
 export interface LotInput {
   instrument_id: string;
+  side?: Side;
   buy_date: string;
   quantity: number;
   unit_price: number;
@@ -205,7 +225,7 @@ export interface AppSettings {
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
 export type DataLevel = "relative" | "full";
 /** What "full detail" adds, in one place for every text that describes it (server: analyzer/persona.py). */
-export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, purchase dates, platforms and holding notes";
+export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {

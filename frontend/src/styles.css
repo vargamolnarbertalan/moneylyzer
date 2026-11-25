@@ -690,6 +690,25 @@ code {
   gap: var(--gap);
   margin-bottom: var(--gap);
 }
+/* A holding with sales has a fifth stat (Realized P/L): three cards over two. */
+.stats.five {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.stats.five > .card {
+  grid-column: span 3;
+}
+.stats.five > .card:nth-child(-n + 3) {
+  grid-column: span 2;
+}
+/* The Overview hero gains a fourth card (Realized P/L) once any holding has sales. */
+.hero.four {
+  grid-template-columns: 1.3fr 1fr 1fr 1fr;
+}
+@media (max-width: 1280px) {
+  .hero.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .cols2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2905,6 +2924,19 @@ a.news-card:hover {
   }
   .stats {
     grid-template-columns: 1fr 1fr;
+  }
+  .stats.five {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stats.five > .card,
+  .stats.five > .card:nth-child(-n + 3) {
+    grid-column: auto;
+  }
+  .stats.five > .card:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+  .hero.four .today {
+    grid-column: 1 / -1;
   }
   .stats .mid {
     font-size: 18px;

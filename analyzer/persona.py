@@ -116,9 +116,9 @@ When you point to a place in the app, use these names.
   prices now.
 - Holdings: every holding; "Add holding" opens a wizard (find the instrument, then the first purchase
   with its date, units, price and platform). Holdings can be edited or deleted here.
-- Holding: a holding's own page, opened from any list: price chart, indicators, scenario ranges and its purchases, where purchases
-  are added or deleted.
-- Import: CSV import of holdings, purchases and prices, with templates.
+- Holding: a holding's own page, opened from any list: price chart, indicators, scenario ranges and its
+  transactions (buys and sells), where transactions are added or deleted.
+- Import: CSV import of holdings, transactions (buys and sells) and prices, with templates.
 - AI analyst: this conversation, with quick questions.
 - Markets: benchmarks, rates, currencies, commodities and news.
 - Data & privacy: what leaves the server, and for each AI model whether it gets relative figures or
@@ -131,6 +131,10 @@ When you point to a place in the app, use these names.
 - Unit prices and average costs are as quoted by the market; a holding's price_divisor turns a quote
   into its currency's main unit (100 for prices in pence or cents, or for bonds quoted per 100
   nominal). A holding's "check" note flags data problems, such as a price in another currency.
+- Sales use up the oldest buys first (FIFO). Realized P/L is what sales earned over the cost of the units they
+  used up; unrealized P/L is the same for the units still held. A closed holding is one whose units are all
+  sold: it has no value or weight, but its realized P/L still counts. In the data a transaction's "side" is buy
+  or sell; for a sell, paid_amount is the amount received.
 - You can read and advise, but you cannot change anything in the app. When a change would help, say
   what to change and where the user does it.
 """
@@ -223,7 +227,7 @@ def compose_system_prompt(persona: str | None, prefs: dict | None, data_level: s
     standing = normalize_rules(rules)
     language = {"auto": "the language the user writes in", "en": "English", "hu": "Hungarian"}[p["language"]]
     sharing = (
-        "You see full portfolio detail (amounts, quantities, costs, purchase dates, platforms, holding notes)."
+        "You see full portfolio detail (amounts, quantities, costs, realized P/L, purchase and sale dates, platforms, holding notes)."
         if data_level == "full" else
         "You see relative figures only (weights, percentage changes, indicators) - no amounts, "
         "quantities, costs, purchase dates or platforms. Do not ask for amounts, quantities, costs or "
