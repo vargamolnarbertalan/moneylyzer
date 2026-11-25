@@ -239,6 +239,19 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/disclaimer/accept", json={"version": "2026-11-24"}).status_code, 403)
         self.assertEqual(TestClient(self.client.app).get("/api/disclaimer").status_code, 401)
 
+    def test_portfolio_history_intervals(self):
+        self.setup_account()
+        result = {"currency": "HUF", "points": [{"t": "2026-11-24T14:30:00Z", "value": 1.0}], "included": ["A"], "daily_only": []}
+        with mock.patch("server.main.intraday_value_history", return_value=result) as build:
+            r = self.client.get("/api/portfolio/history?range=1M&interval=1h")
+        self.assertEqual((r.status_code, r.json()["points"], r.json()["interval"]), (200, result["points"], "1h"))
+        self.assertEqual(build.call_args.args, (31, "1h", "HUF"))
+        self.assertEqual(self.client.get("/api/portfolio/history?range=3Y&interval=1h").status_code, 400)  # daily only
+        self.assertEqual(self.client.get("/api/portfolio/history?range=1Y&interval=5m").status_code, 400)  # Yahoo: 60 days
+        with mock.patch("server.main.intraday_value_history", return_value={"error": "No holding has minute or hour prices on Yahoo."}):
+            self.assertEqual(self.client.get("/api/portfolio/history?range=1W&interval=15m").status_code, 400)
+        self.assertEqual(self.client.get("/api/portfolio/history?range=1W").json()["interval"], "1d")  # unchanged default
+
     def test_live_refresh_setting(self):
         self.setup_account()
         got = self.client.get("/api/settings").json()
