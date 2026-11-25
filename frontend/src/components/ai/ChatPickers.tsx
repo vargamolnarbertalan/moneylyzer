@@ -1,8 +1,9 @@
-import { useId } from "react";
+import * as DM from "@radix-ui/react-dropdown-menu";
+import { Check, ChevronDown, SlidersHorizontal } from "lucide-react";
 import type { Chat } from "../../advisor";
 import type { Effort, Provider } from "../../api";
-import { EFFORT_LABEL, effortOptions } from "../../effort";
-import { Select } from "../Select";
+import { EFFORTS, EFFORT_LABEL } from "../../effort";
+import { navigate } from "../../router";
 
 /** Which model a chat goes to, and at which effort: the same rule on every page that starts or continues one. */
 export function chatModel(chat: Chat, list: Provider[]) {
@@ -22,7 +23,7 @@ export const withEffort = (c: Chat, selected: Provider | null, effort: Effort): 
   effort,
 });
 
-interface ChatPickersProps {
+interface ModelMenuProps {
   chat: Chat;
   list: Provider[];
   loading: boolean;
@@ -30,68 +31,78 @@ interface ChatPickersProps {
   /** Another model starts a new conversation; the caller clears it. */
   onModel: (providerId: string) => void;
   onEffort: (effort: Effort) => void;
-  /** The model picker's id, so another control can bring it into view. */
-  modelId?: string;
-  className?: string;
+  /** Where the menu opens: above a message box at the bottom of the screen, below one higher up. */
+  side?: "top" | "bottom";
 }
 
-/** Model and effort pickers. Effort applies to the current conversation only; the model's setting is never changed. */
-export function ChatPickers({ chat, list, loading, disabled, onModel, onEffort, modelId, className }: ChatPickersProps) {
-  const uid = useId();
-  const mid = modelId ?? `${uid}m`;
+/**
+ * One compact button for the model and the effort, like Claude's own model picker: it reads
+ * "claude-opus-5-5 · high" and opens a menu with both. Effort applies to the current conversation
+ * only; the model's saved setting is never changed here.
+ */
+export function ModelMenu({ chat, list, loading, disabled, onModel, onEffort, side = "top" }: ModelMenuProps) {
   const { selected, takesEffort, effort, overridden } = chatModel(chat, list);
   const ongoing = chat.messages.length > 0;
+  const effortText = effort ? (effort === "default" ? "default effort" : effort) : null;
+  const name = selected ? [selected.model, effortText].filter(Boolean).join(" · ") : loading ? "Loading…" : "No model";
+  const spoken = selected
+    ? `Model: ${selected.name}, ${selected.model}. Effort: ${effort ? EFFORT_LABEL[effort] : selected.kind === "openai_compat" ? "set by the provider" : "not supported"}. Change`
+    : name;
+
   return (
-    <div className={`chat-pickers ${className ?? ""}`.trim()}>
-      <div className="field chat-model">
-        <label htmlFor={mid}>Model</label>
-        <Select
-          id={mid}
-          value={selected?.id ?? ""}
-          disabled={disabled || list.length === 0}
-          noClosedTypeahead
-          aria-describedby={ongoing ? `${uid}mh` : undefined}
-          onValueChange={(v) => {
-            if (v !== chat.providerId) onModel(v);
-          }}
-          options={
-            list.length === 0
-              ? [{ value: "", label: loading ? "Loading…" : "No model" }]
-              : list.map((p) => ({ value: p.id, label: `${p.name} · ${p.model}` }))
-          }
-        />
-        {ongoing && (
-          <span id={`${uid}mh`} className="help">
-            Changing the model starts a new conversation.
-          </span>
-        )}
-      </div>
-      <div className="field chat-effort">
-        {takesEffort && effort ? (
-          <>
-            <label htmlFor={`${uid}e`}>Effort</label>
-            <Select
-              id={`${uid}e`}
-              value={effort}
-              disabled={disabled}
-              noClosedTypeahead
-              aria-describedby={`${uid}eh`}
-              onValueChange={(v) => onEffort(v as Effort)}
-              options={effortOptions()}
-            />
-            <span id={`${uid}eh`} className="help">
-              {overridden && selected ? `This chat only (saved: ${EFFORT_LABEL[selected.effort].toLowerCase()}).` : "Higher is slower and uses more."}
-            </span>
-          </>
-        ) : (
-          <>
-            <span className="lbl">Effort</span>
-            <span className="static-value">
-              {!selected ? "—" : selected.kind === "openai_compat" ? "Set by the provider" : "Not supported by this model"}
-            </span>
-          </>
-        )}
-      </div>
-    </div>
+    <DM.Root modal={false}>
+      <DM.Trigger asChild disabled={disabled || !selected}>
+        <button type="button" className="model-btn" aria-label={spoken} title={selected ? `${selected.name} · ${selected.model}` : undefined}>
+          <span className="model-btn-text">{name}</span>
+          <ChevronDown aria-hidden="true" />
+        </button>
+      </DM.Trigger>
+      <DM.Portal>
+        <DM.Content className="glass menu-pop model-menu" side={side} align="start" sideOffset={6} collisionPadding={8}>
+          <DM.Label className="menu-head">Model</DM.Label>
+          <DM.RadioGroup value={selected?.id ?? ""} onValueChange={(v) => v !== chat.providerId && onModel(v)}>
+            {list.map((p) => (
+              <DM.RadioItem key={p.id} value={p.id} className="menu-item menu-radio">
+                <span className="menu-text">
+                  <span>{p.name}</span>
+                  <small>{p.model}</small>
+                </span>
+                <DM.ItemIndicator className="menu-check">
+                  <Check aria-hidden="true" />
+                </DM.ItemIndicator>
+              </DM.RadioItem>
+            ))}
+          </DM.RadioGroup>
+          {ongoing && <p className="menu-note">Another model starts a new conversation.</p>}
+          <DM.Separator className="menu-sep" />
+          <DM.Label className="menu-head">
+            Effort
+            {overridden && selected && <small> · this chat only (saved: {EFFORT_LABEL[selected.effort].toLowerCase()})</small>}
+          </DM.Label>
+          {takesEffort && effort ? (
+            <>
+              <DM.RadioGroup value={effort} onValueChange={(v) => onEffort(v as Effort)}>
+                {EFFORTS.map((e) => (
+                  <DM.RadioItem key={e} value={e} className="menu-item menu-radio">
+                    <span className="menu-text">{EFFORT_LABEL[e]}</span>
+                    <DM.ItemIndicator className="menu-check">
+                      <Check aria-hidden="true" />
+                    </DM.ItemIndicator>
+                  </DM.RadioItem>
+                ))}
+              </DM.RadioGroup>
+              <p className="menu-note">Higher is slower and uses more of your plan or budget.</p>
+            </>
+          ) : (
+            <p className="menu-note">{selected?.kind === "openai_compat" ? "Set by the provider." : "Not supported by this model."}</p>
+          )}
+          <DM.Separator className="menu-sep" />
+          <DM.Item className="menu-item" onSelect={() => navigate("/settings#ai")}>
+            <SlidersHorizontal aria-hidden="true" />
+            Manage models
+          </DM.Item>
+        </DM.Content>
+      </DM.Portal>
+    </DM.Root>
   );
 }

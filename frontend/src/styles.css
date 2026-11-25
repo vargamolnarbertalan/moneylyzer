@@ -73,6 +73,16 @@ html {
      panning a zoomed page still work. Tables and code that are wider scroll inside their own box. */
   overflow-x: clip;
 }
+/* Radix locks scrolling while a dropdown is open by putting overflow:hidden on <body>. That turns <body>
+   into a scroll container, so the sticky sidebar and composer jump up by the scroll offset. Lock <html>
+   (the page's real scroller) instead and leave <body> visible; the library's scrollbar compensation
+   (margin-right on <body>) still keeps the layout from shifting. */
+html body[data-scroll-locked] {
+  overflow: visible !important;
+}
+html:has(body[data-scroll-locked]) {
+  overflow: hidden;
+}
 html,
 body {
   margin: 0;
@@ -2337,23 +2347,90 @@ input[type="radio"],
   gap: 10px;
   margin-top: 12px;
 }
-/* the Overview card's model and effort, above its question box */
-.chat-pickers.compact {
-  margin-top: 12px;
+.advisor-ask .model-btn {
+  flex: none; /* its natural width; only a narrow screen cuts the name (max-width) */
+  max-width: 45%;
+  min-height: 40px; /* the question box's height */
 }
-/* above the AI analyst composer: which model and effort the next question goes to */
-.composer-model {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
+/* Model and effort in one compact button, like Claude's own model picker ("claude-opus-5-5 · high"). */
+.model-btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  font-size: 12.5px;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.model-btn:hover:not(:disabled),
+.model-btn[data-state="open"] {
+  color: var(--text);
+  background: var(--glass-hi);
+}
+.model-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.model-btn-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-btn svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+}
+.model-menu {
+  min-width: 250px;
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+}
+.menu-head {
+  padding: 8px 10px 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   color: var(--muted);
 }
-.composer-model b {
-  color: var(--text);
-  font-weight: 600;
+.menu-head small {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+}
+.menu-radio {
+  justify-content: space-between;
+  min-height: 36px;
+  padding-block: 6px;
+}
+.menu-text {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+.menu-text small {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.menu-check {
+  display: inline-flex;
+  color: var(--accent2);
+}
+.menu-note {
+  margin: 2px 10px 8px;
+  max-width: 260px;
+  font-size: 12px;
+  color: var(--muted);
 }
 /* Ask: a neutral button until there is a question (a faded gradient read as broken). */
 .send-btn:disabled,
@@ -2558,42 +2635,14 @@ input[type="radio"],
   display: flex;
   flex-wrap: wrap;
   gap: 10px 14px;
-  align-items: flex-start; /* a help line under a picker must not move the buttons beside it */
-  justify-content: space-between;
-}
-/* Model and effort side by side, tops aligned, so a help line under one never shifts the other's control */
-.chat-pickers {
-  flex: 1 1 400px;
-  min-width: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px 14px;
-  align-items: flex-start;
-}
-.chat-model {
-  flex: 1 1 240px;
-  max-width: 380px;
-}
-.chat-effort {
-  flex: 0 1 190px;
-  min-width: 150px;
-}
-/* a read-only value where a control would be: lines up with the selects beside it */
-.static-value {
-  min-height: 40px; /* .input's height; 44px on touch widths, below */
-  display: flex;
   align-items: center;
-  font-size: 13.5px;
-  color: var(--muted);
+  justify-content: flex-end;
 }
 .chat-head-side {
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
   align-items: center;
-  /* level with the pickers' controls: past their label line (12.5px label + 5px gap), as tall as a select */
-  margin-top: 23px;
-  min-height: 40px;
 }
 .focus-chip {
   display: inline-flex;
@@ -2687,13 +2736,20 @@ input[type="radio"],
   bottom: var(--sticky-bottom, 0px);
   z-index: 3;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
   padding: 8px;
   background: var(--surface-solid);
   border: 1px solid var(--border);
   border-radius: 18px;
+}
+/* under the question: the model and effort on the left, Send on the right */
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
 }
 .composer textarea {
   width: 100%;
@@ -3085,11 +3141,8 @@ a.news-card:hover {
   .field input,
   .field textarea,
   .input,
-  .static-value {
+  .model-btn {
     min-height: 44px;
-  }
-  .chat-head-side {
-    margin-top: 0;
   }
   .dismiss {
     min-width: 44px;
