@@ -337,6 +337,8 @@ export interface AdvisorAnswer {
   model: string;
   sources: AdvisorSource[];
   provider: { id: string; name: string; kind: ProviderKind };
+  /** The effort this answer ran at; null for a model that takes none (OpenAI-compatible). */
+  effort?: Effort | null;
   shared: AdvisorShared;
 }
 
@@ -523,7 +525,7 @@ export const endpoints = {
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
   saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
   /** expected_level: the level the conversation's answers were written at (409 if the model's level changed). */
-  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel }) =>
+  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel; effort?: Effort }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
 };

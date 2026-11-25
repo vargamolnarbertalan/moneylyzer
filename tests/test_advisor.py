@@ -428,6 +428,24 @@ class ContextPrivacyTests(TempDb):
         self.assertEqual(captured["system"], first)
         self.assertIn("2030-01-01 00:00", captured["messages"][-1]["content"])
 
+    def test_chat_effort_applies_to_the_question_only_and_is_reported(self):
+        used = []
+
+        def fake_complete(provider, system, messages):
+            used.append(provider.effort)
+            return {"text": "ok", "model": "m", "sources": []}
+
+        with mock.patch("analyzer.advisor.complete", fake_complete):
+            self.assertEqual(advisor.ask(None, "q", [], self.snapshot())["effort"], "default")  # the model's saved one
+            self.assertEqual(advisor.ask(None, "q", [], self.snapshot(), effort="xhigh")["effort"], "xhigh")
+            with self.assertRaises(llm.LLMError):
+                advisor.ask(None, "q", [], self.snapshot(), effort="ultra")
+            local = advisor.save_provider({"name": "Local", "kind": "openai_compat", "model": "llama3.1:8b",
+                                           "base_url": "http://127.0.0.1:11434/v1"}, None)
+            self.assertIsNone(advisor.ask(local, "q", [], self.snapshot(), effort="max")["effort"])  # takes none
+        self.assertEqual(used, ["default", "xhigh", "high"])  # the local model kept its stored value, unused
+        self.assertEqual(advisor.get_provider(None).effort, "default")  # a chat choice is never saved
+
     def test_a_conversation_stays_at_its_sharing_level(self):
         sent = mock.Mock(return_value={"text": "ok", "model": "m", "sources": []})
         history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "777 units"}]

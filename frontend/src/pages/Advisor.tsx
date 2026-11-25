@@ -2,7 +2,8 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type K
 import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
 import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
-import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Provider } from "../api";
+import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type Provider } from "../api";
+import { EFFORT_LABEL, effortOptions, effortPhrase } from "../effort";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
 import { Select } from "../components/Select";
@@ -37,6 +38,10 @@ export function AdvisorPage() {
   const list: Provider[] = providers.data ?? [];
   const selected = list.find((p) => p.id === chat.providerId) ?? list.find((p) => p.is_default) ?? list[0] ?? null;
   const holdingName = holdingId ? (live.snapshot?.rows.find((r) => r.id === holdingId)?.name ?? holdingId) : null;
+  // Claude models take an effort; a choice made here applies to this conversation only (never saved to the model).
+  const takesEffort = selected !== null && selected.kind !== "openai_compat";
+  const effort: Effort | null = selected && takesEffort ? (chat.effort ?? selected.effort) : null;
+  const overridden = takesEffort && chat.effort != null && chat.effort !== selected?.effort;
 
   useEffect(() => {
     saveChat(chat);
@@ -70,12 +75,14 @@ export function AdvisorPage() {
         if (level) body.expected_level = level;
         const pid = chatRef.current.providerId;
         if (pid) body.provider_id = pid;
+        const chosen = chatRef.current.effort;
+        if (chosen) body.effort = chosen;
         if (holding) body.instrument_id = holding;
         const res = await endpoints.ask(body);
         setChat((c) => ({
           ...c,
           providerId: c.providerId ?? res.provider.id, // later questions go to the model that answered, not a new default
-          messages: [...c.messages, { id: newId(), role: "assistant", content: res.text, meta: { provider: res.provider, model: res.model, sources: res.sources ?? [], shared: res.shared } }],
+          messages: [...c.messages, { id: newId(), role: "assistant", content: res.text, meta: { provider: res.provider, model: res.model, effort: res.effort ?? null, sources: res.sources ?? [], shared: res.shared } }],
         }));
       } catch (err) {
         setFailure(errorMessage(err));
@@ -131,7 +138,7 @@ export function AdvisorPage() {
 
   const newConversation = () => {
     clearChat();
-    setChat({ providerId: selected?.id ?? null, messages: [] });
+    setChat((c) => ({ providerId: selected?.id ?? null, effort: c.effort ?? null, messages: [] }));
     setFailure(null);
     setStale(false);
     setDraft("");
@@ -139,6 +146,7 @@ export function AdvisorPage() {
 
   const textareaId = useId();
   const modelId = useId();
+  const effortId = useId();
   const rows = Math.min(6, Math.max(2, draft.split("\n").length));
   const empty = chat.messages.length === 0;
   const lastIsUser = chat.messages[chat.messages.length - 1]?.role === "user";
@@ -147,6 +155,7 @@ export function AdvisorPage() {
     <div className="advisor-layout">
       <Card as="section" className="chat" aria-label="AI analyst chat">
         <div className="chat-head">
+          <div className="chat-pickers">
           <div className="field chat-model">
             <label htmlFor={modelId}>Model</label>
             <Select
@@ -175,6 +184,33 @@ export function AdvisorPage() {
                 Changing the model starts a new conversation.
               </span>
             )}
+          </div>
+          <div className="field chat-effort">
+            {takesEffort && effort ? (
+              <>
+                <label htmlFor={effortId}>Effort</label>
+                <Select
+                  id={effortId}
+                  value={effort}
+                  disabled={waiting}
+                  noClosedTypeahead
+                  aria-describedby={overridden ? `${effortId}h` : undefined}
+                  onValueChange={(v) => setChat((c) => ({ ...c, effort: v as Effort }))}
+                  options={effortOptions()}
+                />
+                {overridden && selected && (
+                  <span id={`${effortId}h`} className="help">
+                    This conversation only; the model's setting is {EFFORT_LABEL[selected.effort].toLowerCase()}.
+                  </span>
+                )}
+              </>
+            ) : (
+              <>
+                <span className="lbl">Effort</span>
+                <span className="static-value">{selected ? "Set by the provider" : "—"}</span>
+              </>
+            )}
+          </div>
           </div>
           <div className="chat-head-side">
             {selected && (
@@ -254,7 +290,8 @@ export function AdvisorPage() {
           {chat.messages.map((m) => (m.role === "user" ? <div key={m.id} className="msg user"><p>{m.content}</p></div> : <Answer key={m.id} m={m} />))}
           {waiting && (
             <div className="msg assistant pending" role="status">
-              <span className="spinner" aria-hidden="true" /> The AI analyst is thinking… this can take up to two minutes.
+              <span className="spinner" aria-hidden="true" /> The AI analyst is thinking
+              {selected ? ` (${selected.model}${effort ? `, ${effortPhrase(effort)}` : ""})` : ""}… this can take up to two minutes.
             </div>
           )}
           {failure && !waiting && (
@@ -311,6 +348,7 @@ function Answer({ m }: { m: ChatMessage }) {
       {meta && (
         <div className="msg-meta">
           {meta.provider.name} · {meta.model}
+          {meta.effort ? ` · ${effortPhrase(meta.effort)}` : ""}
         </div>
       )}
       <Markdown source={m.content} />

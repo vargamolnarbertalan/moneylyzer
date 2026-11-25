@@ -2543,9 +2543,29 @@ input[type="radio"],
   align-items: flex-end;
   justify-content: space-between;
 }
+/* Model and effort side by side, tops aligned, so a help line under one never shifts the other's control */
+.chat-pickers {
+  flex: 1 1 400px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-start;
+}
 .chat-model {
   flex: 1 1 240px;
   max-width: 380px;
+}
+.chat-effort {
+  flex: 0 1 190px;
+  min-width: 150px;
+}
+/* a read-only value where a control would be: lines up with the selects beside it */
+.static-value {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  font-size: 13.5px;
+  color: var(--muted);
 }
 .chat-head-side {
   display: flex;
