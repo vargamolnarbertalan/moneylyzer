@@ -155,6 +155,11 @@ function AiSharing() {
         Set per connected model. Relative figures are {RELATIVE_ITEMS} only. Full detail adds your {FULL_DETAIL_ITEMS}.
         A local model keeps everything on your network.
       </p>
+      <p className="sub">
+        Your questions and the answers (with the model, effort, sources and what was shared, never your portfolio data itself) are saved on this
+        server as Recent conversations in the AI analyst: for 90 days after the last answer, at most the 100 newest. Delete one or all there;
+        backups you already downloaded keep what they had.
+      </p>
       {providers.loading && !providers.data ? (
         <BlockSkeleton rows={2} />
       ) : providers.error && !providers.data ? (

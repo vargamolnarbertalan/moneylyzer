@@ -4,7 +4,7 @@ import re
 import tempfile
 import threading
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -213,6 +213,7 @@ class OpenAICompatTests(TempDb):
                 llm.complete(p, "SYS", [{"role": "user", "content": "hi"}])
         finally:
             server.shutdown()
+            server.server_close()  # else its listening socket leaks into a ResourceWarning
 
 
 class AnthropicTests(TempDb):
@@ -452,6 +453,89 @@ class ContextPrivacyTests(TempDb):
         self.assertEqual(advisor.get_provider(None).effort, "default")  # a chat choice is never saved
         listed = {p["id"]: p["takes_effort"] for p in advisor.list_providers()}
         self.assertEqual((listed["claude-login"], listed[api], listed[old], listed[local]), (True, True, False, False))
+
+    def test_answers_are_saved_to_their_conversation(self):
+        ok = {"text": "Concentrated.", "model": "claude-opus-5-5", "sources": [{"title": "t", "url": "https://x.test"}]}
+        with mock.patch("analyzer.advisor.complete", return_value=ok):
+            advisor.ask(None, "  How\nconcentrated am I?  ", [], self.snapshot(), conversation_id="conv-0001", instrument_id=None)
+            advisor.ask(None, "And now?", [], self.snapshot(), conversation_id="conv-0001")
+            advisor.ask(None, "Other", [], self.snapshot())  # no id: nothing saved
+        with mock.patch("analyzer.advisor.complete", side_effect=llm.LLMError("down")):
+            with self.assertRaises(llm.LLMError):
+                advisor.ask(None, "Lost?", [], self.snapshot(), conversation_id="conv-0001")  # a failure is not saved
+        [row] = advisor.list_conversations()
+        self.assertEqual((row["id"], row["title"], row["count"], row["provider_name"]),
+                         ("conv-0001", "How concentrated am I?", 4, "Claude (subscription login)"))
+        saved = advisor.get_conversation("conv-0001")["messages"]
+        self.assertEqual([m["role"] for m in saved], ["user", "assistant", "user", "assistant"])
+        self.assertEqual(saved[1]["meta"]["model"], "claude-opus-5-5")
+        self.assertEqual(saved[1]["meta"]["effort"], "default")
+        self.assertEqual(saved[1]["meta"]["sources"][0]["url"], "https://x.test")
+        self.assertEqual(saved[1]["meta"]["shared"]["data_level"], "relative")
+        self.assertEqual(advisor.delete_conversation("conv-0001"), 1)
+        with self.assertRaises(KeyError):
+            advisor.get_conversation("conv-0001")
+
+    def test_concurrent_saves_keep_every_turn(self):
+        answer = {"text": "a", "model": "m", "sources": []}
+        errors = []
+
+        def save(i):
+            try:
+                advisor.save_turn("conv-shared", "claude-login", f"q{i}", answer)
+            except Exception as exc:  # pragma: no cover - the failure being tested for
+                errors.append(exc)
+
+        threads = [threading.Thread(target=save, args=(i,)) for i in range(6)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(20)
+        self.assertEqual(errors, [])
+        messages = advisor.get_conversation("conv-shared")["messages"]
+        self.assertEqual(sorted(m["content"] for m in messages if m["role"] == "user"), [f"q{i}" for i in range(6)])
+
+    def test_a_retried_question_replaces_its_saved_answer(self):
+        advisor.save_turn("conv-retry1", "claude-login", "q", {"text": "first", "model": "m", "sources": []}, turn_id="turn-0001")
+        advisor.save_turn("conv-retry1", "claude-login", "q", {"text": "second", "model": "m", "sources": []}, turn_id="turn-0001")
+        messages = advisor.get_conversation("conv-retry1")["messages"]
+        self.assertEqual([(m["role"], m["content"]) for m in messages], [("user", "q"), ("assistant", "second")])
+
+    def test_refused_and_conflicting_questions_are_not_saved(self):
+        history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}]
+        with mock.patch("analyzer.advisor.complete", return_value={"text": "ok", "model": "m", "sources": []}):
+            with self.assertRaises(advisor.LevelChanged):
+                advisor.ask(None, "q", history, self.snapshot(), expected_level="full", conversation_id="conv-0409")
+        with mock.patch("analyzer.advisor.complete", side_effect=llm.LLMError("The model declined this request.")):
+            with self.assertRaises(llm.LLMError):
+                advisor.ask(None, "q", [], self.snapshot(), conversation_id="conv-0409")
+        self.assertEqual(advisor.list_conversations(), [])
+
+    def test_retention_runs_at_startup_and_deleted_text_leaves_the_file(self):
+        advisor.save_turn("conv-expired", "claude-login", "OLDSECRETQUESTION", {"text": "a", "model": "m", "sources": []},
+                          now=datetime(2020, 1, 1, tzinfo=timezone.utc))
+        advisor.init_tables()  # every start purges
+        with self.assertRaises(KeyError):
+            advisor.get_conversation("conv-expired")
+        advisor.save_turn("conv-gone-01", "claude-login", "q", {"text": "DELETEDSECRETANSWER" * 300, "model": "m", "sources": []})
+        advisor.delete_conversation("conv-gone-01")
+        backup = db.backup_bytes()
+        self.assertNotIn(b"DELETEDSECRETANSWER", backup)
+        self.assertNotIn(b"OLDSECRETQUESTION", backup)
+
+    def test_saved_conversations_expire_and_are_capped(self):
+        answer = {"text": "a", "model": "m", "sources": []}
+        old = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        advisor.save_turn("old-conversation", "claude-login", "q", answer, now=old)
+        later = old + timedelta(days=advisor.CONVERSATION_KEEP_DAYS + 1)
+        self.assertEqual(advisor.list_conversations(now=later), [])  # 90 days without an answer: gone
+        with mock.patch.object(advisor, "MAX_CONVERSATIONS", 3):
+            for i in range(5):
+                advisor.save_turn(f"conv-000{i}", "claude-login", f"q{i}", answer, now=later + timedelta(minutes=i))
+            self.assertEqual([c["id"] for c in advisor.list_conversations(now=later)], ["conv-0004", "conv-0003", "conv-0002"])
+        with self.assertRaises(ValueError):
+            advisor.save_turn("bad id!", "claude-login", "q", answer)
+        self.assertEqual(advisor.delete_conversation(None), 3)
 
     def test_a_conversation_stays_at_its_sharing_level(self):
         sent = mock.Mock(return_value={"text": "ok", "model": "m", "sources": []})

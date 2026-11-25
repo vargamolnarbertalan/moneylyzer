@@ -344,6 +344,26 @@ export interface AdvisorAnswer {
   shared: AdvisorShared;
 }
 
+/** A saved AI analyst conversation in the Recent list (no messages). */
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  provider_id: Nullable<string>;
+  provider_name: Nullable<string>;
+  model: Nullable<string>;
+  created_at: string;
+  updated_at: string; // "YYYY-MM-DD HH:MM:SS", UTC
+  count: number;
+}
+
+export interface SavedConversation {
+  id: string;
+  title: string;
+  provider_id: Nullable<string>;
+  updated_at: string;
+  messages: { id: string; role: "user" | "assistant"; content: string; meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared"> }[];
+}
+
 export interface MarketItem {
   symbol: string;
   name: string;
@@ -527,9 +547,13 @@ export const endpoints = {
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
   saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
   /** expected_level: the level the conversation's answers were written at (409 if the model's level changed). */
-  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel; effort?: Effort }) =>
+  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel; effort?: Effort; conversation_id?: string; turn_id?: string }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
+  conversations: () => api.get<ConversationSummary[]>("/api/advisor/conversations"),
+  conversation: (id: string) => api.get<SavedConversation>(`/api/advisor/conversations/${encodeURIComponent(id)}`),
+  deleteConversation: (id: string) => api.del<{ ok: boolean }>(`/api/advisor/conversations/${encodeURIComponent(id)}`),
+  deleteAllConversations: () => api.del<{ deleted: number }>("/api/advisor/conversations"),
 };
 
 export function errorMessage(err: unknown): string {

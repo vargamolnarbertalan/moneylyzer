@@ -13,6 +13,8 @@ export interface ChatMessage {
 }
 
 export interface Chat {
+  /** The saved conversation this chat's answers go to (Recent conversations). */
+  conversationId: string;
   providerId: string | null;
   /** Effort chosen in this conversation; null means the model's saved effort. Never saved to the model. */
   effort?: Effort | null;
@@ -101,15 +103,27 @@ export function newId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+const CONVERSATION_ID = /^[A-Za-z0-9_-]{8,40}$/;
+
+/** A new, empty conversation (its own id: the server saves its answers under it). */
+export function freshChat(providerId: string | null, effort: Effort | null = null): Chat {
+  return { conversationId: newId(), providerId, effort, messages: [] };
+}
+
 export function loadChat(): Chat {
   const c = readSession<Chat>(CHAT_KEY);
-  if (!c || !Array.isArray(c.messages)) return { providerId: null, messages: [] };
+  if (!c || !Array.isArray(c.messages)) return freshChat(null);
   const messages = c.messages.filter((m) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string");
-  return { providerId: typeof c.providerId === "string" ? c.providerId : null, effort: isEffort(c.effort) ? c.effort : null, messages };
+  return {
+    conversationId: typeof c.conversationId === "string" && CONVERSATION_ID.test(c.conversationId) ? c.conversationId : newId(),
+    providerId: typeof c.providerId === "string" ? c.providerId : null,
+    effort: isEffort(c.effort) ? c.effort : null,
+    messages,
+  };
 }
 
 export function saveChat(chat: Chat): void {
-  writeSession(CHAT_KEY, { providerId: chat.providerId, effort: chat.effort ?? null, messages: chat.messages.slice(-80) });
+  writeSession(CHAT_KEY, { conversationId: chat.conversationId, providerId: chat.providerId, effort: chat.effort ?? null, messages: chat.messages.slice(-80) });
 }
 
 export function clearChat(): void {
