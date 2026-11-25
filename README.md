@@ -10,8 +10,9 @@ It is **not** a broker connection, a trading tool or financial advice.
 ![Overview: portfolio value, value over time with two points compared, allocation and holdings](docs/images/overview.png)
 
 > **Not financial advice.** Moneylyzer is a free, self-hosted tool for your own records and research.
-> Nothing it shows (including AI-generated analysis) is investment, tax or legal advice or a
-> recommendation to buy, sell or hold anything. You decide and are responsible for your investments;
+> Nothing it shows is investment, tax or legal advice from its author. AI-generated text, including
+> recommendations if you turn them on, comes from the AI model you connect, unverified and not a
+> suitability assessment by a licensed adviser. You decide and are responsible for your investments;
 > the software comes "as is" and, as far as the law allows, its author is not liable for your losses.
 > Full notice: [DISCLAIMER.md](DISCLAIMER.md).
 
@@ -162,8 +163,8 @@ If this saves you time, you can [buy me a coffee via Revolut](https://revolut.me
 ## Disclaimer
 
 Moneylyzer is for personal record keeping and research only. It is not investment, financial, tax or
-legal advice, and nothing it shows (prices, signals, scenarios, news or AI-generated analysis) is a
-recommendation to buy, sell or hold any financial instrument. Figures can be delayed, incomplete or
+legal advice from its author. AI-generated analysis and, if you turn them on, AI recommendations come
+from the model you connect; they are unverified and not a suitability assessment. Figures can be delayed, incomplete or
 wrong and AI output can be wrong; check with your broker and the original sources. You alone decide
 and are responsible for your investment decisions. The software is provided "as is", without
 warranty; to the fullest extent the law allows, the author and contributors are not liable for any
