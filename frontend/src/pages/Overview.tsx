@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ChartBar, ChartPie, Info, LayoutGrid } from "lucide-react";
-import { endpoints, type HistoryRange, type Row, type Snapshot } from "../api";
+import { endpoints, type HistoryRange, type IntradayHistory, type Row, type Snapshot } from "../api";
+import { INTERVALS, defaultInterval, intervalOptions, intervalsFor, isYahooSymbol, useIntraday, type Interval } from "../intraday";
 import { AdvisorCard } from "../components/AdvisorCard";
 import { Alert } from "../components/Alert";
 import { AreaChart } from "../components/AreaChart";
@@ -204,10 +205,70 @@ function ValueChart({ snap }: { snap: Snapshot }) {
   const chartCcy = history.data?.currency || base;
   const axis = useMemo(() => axisFormatter(values, chartCcy), [values, chartCcy]);
 
+  // Minute/hour intervals: the total rebuilt from Yahoo's bars, refreshed every minute while in view.
+  const yahoo = snap.rows.some((r) => isYahooSymbol(r.symbol) && r.type !== "government_bond"); // as the server counts
+  const [picked, setPicked] = useState<{ range: RangeValue; interval: Interval } | null>(null);
+  const offered = intervalsFor(range, yahoo);
+  const interval: Interval = picked?.range === range && offered.includes(picked.interval) ? picked.interval : defaultInterval(range, yahoo);
+  const intraday = interval !== "1d";
+  const { current, stale } = useIntraday<IntradayHistory>(`${range}|${interval}|${base}|${holdingsCount}`, intraday, () =>
+    endpoints.intradayHistory(range, interval),
+  );
+  const bars = useMemo(() => current?.data?.points ?? [], [current?.data]);
+  const barValues = useMemo(() => bars.map((p) => p.value), [bars]);
+  const barLabels = useMemo(() => bars.map((p) => asOfLabel(p.t)), [bars]); // memoised: thousands of bars
+  const barCcy = current?.data?.currency || base;
+  const barAxis = useMemo(() => axisFormatter(barValues, barCcy), [barValues, barCcy]);
+  const what = INTERVALS[interval].adjective;
+  const dailyOnly = (current?.data?.daily_only ?? []).map((id) => snap.rows.find((r) => r.id === id)?.name ?? id);
+  const status = !intraday
+    ? ""
+    : !current
+      ? `Loading ${what} values from Yahoo…`
+      : current.error
+        ? current.error
+        : stale
+          ? "Could not refresh the values from Yahoo."
+          : `Showing ${what} values.`; // no count: it would be announced again on every refresh
+
   return (
     <Card as="section" aria-labelledby="value-chart-h">
-      <CardHeader id="value-chart-h" title="Value over time" aside={<Segmented label="Chart range" options={RANGES} value={range} onChange={setRange} />} />
-      {history.loading && !history.data ? (
+      <CardHeader
+        id="value-chart-h"
+        title="Value over time"
+        aside={
+          <div className="chart-controls">
+            {offered.length > 1 && (
+              <Segmented label="Value interval" options={intervalOptions(offered)} value={interval} onChange={(v) => setPicked({ range, interval: v })} />
+            )}
+            <Segmented label="Chart range" options={RANGES} value={range} onChange={setRange} />
+          </div>
+        }
+      />
+      <p className="sr-only" role="status">
+        {status}
+      </p>
+      {intraday ? (
+        !current ? (
+          <div className="chart-empty">Loading {what} values from Yahoo…</div>
+        ) : current.error ? (
+          <div className="chart-empty">{current.error} Pick 1D for the stored daily curve.</div>
+        ) : barValues.length < 2 ? (
+          <div className="chart-empty">Yahoo has no {what} prices for this range.</div>
+        ) : (
+          <AreaChart
+            values={barValues}
+            labels={barLabels}
+            fmt={barAxis}
+            fmtTip={(v) => money(v, barCcy)}
+            fmtDelta={(v) => signedMoney(v, barCcy)}
+            resetKey={`${range}|${interval}|${barCcy}`}
+            tone="accent"
+            live={!stale}
+            label={`Portfolio value in ${barCcy}, ${range}, ${INTERVALS[interval].name} steps`}
+          />
+        )
+      ) : history.loading && !history.data ? (
         <Skeleton h="calc(var(--chart-h) + 50px)" /* the chart plus its compare row: nothing below moves */ />
       ) : history.error && !history.data ? (
         <Alert tone="err">
@@ -235,12 +296,22 @@ function ValueChart({ snap }: { snap: Snapshot }) {
           <AreaChart values={values} labels={labels} fmt={axis} fmtTip={(v) => money(v, chartCcy)} fmtDelta={(v) => signedMoney(v, chartCcy)} resetKey={`${history.data?.range ?? range}|${chartCcy}|${history.data?.seq ?? 0}`} busy={history.loading} tone="accent" live label={`Portfolio value in ${chartCcy}, ${history.data?.range ?? range}`} />
         </div>
       )}
+      {intraday && current?.data && bars.length > 1 && (
+        <p className="note">
+          {stale && current.at && `Could not refresh from Yahoo: these are the values from ${asOfLabel(current.at)}. `}
+          {bars.length} {what} values in your local time, at the moments your holdings traded.
+          {dailyOnly.length > 0 && ` At their latest daily price: ${dailyOnly.join(", ")} (Yahoo had no ${what} prices).`}
+        </p>
+      )}
       <details className="note-more">
         <summary>
           <Info aria-hidden="true" />
           How it's calculated
         </summary>
-        <p className="note">Rebuilt from stored daily prices × the units you held (your buys and sells), converted at each day's rate; holdings without transactions use today's quantity.</p>
+        <p className="note">
+          Rebuilt from stored daily prices × the units you held (your buys and sells), converted at each day's rate; holdings without transactions use today's quantity.
+          {" "}With a minute or hour interval: Yahoo's prices at each moment one of your holdings traded (as traded, not adjusted for dividends) and the exchange rate at that moment; funds and other holdings without such prices count at their latest daily price. Fetched when you look, not stored.
+        </p>
       </details>
     </Card>
   );

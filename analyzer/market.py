@@ -77,7 +77,9 @@ INTRADAY = {"1m": ("1m", 7), "5m": ("5m", 59), "15m": ("15m", 59), "30m": ("30m"
 # Shorter than the browser's 60 s refresh: an entry is stamped when its fetch started, so the next minute's
 # refresh always misses it and gets new bars, while a second tab or a quick back-and-forth is served here.
 INTRADAY_CACHE_SECONDS = 45
-INTRADAY_CACHE_MAX = 64  # a handful of holdings x intervals; never grows without bound
+# a portfolio chart asks for every ticker and currency pair at once: room for a large portfolio and two
+# intervals, so entries don't evict each other within one call; still never grows without bound
+INTRADAY_CACHE_MAX = 256
 _intraday_cache: dict[tuple[str, str, int], tuple[float, pd.DataFrame, str]] = {}
 _intraday_lock = threading.Lock()
 

@@ -69,6 +69,17 @@ export interface HistoryPoint {
   value: number;
 }
 
+export interface IntradayHistory {
+  range: string;
+  interval: string;
+  currency: string;
+  /** Oldest first; `t` is UTC. */
+  points: { t: string; value: number }[];
+  included: string[];
+  /** Holdings Yahoo had no minute/hour prices for: valued at their stored daily price. */
+  daily_only: string[];
+}
+
 export interface HistoryResponse {
   range: string;
   /** Currency of every point: the base currency the curve was converted to. */
@@ -522,6 +533,9 @@ export const endpoints = {
   portfolio: () => api.get<Snapshot>("/api/portfolio"),
   refresh: () => api.post<Snapshot>("/api/portfolio/refresh"),
   history: (range: HistoryRange) => api.get<HistoryResponse>(`/api/portfolio/history?range=${encodeURIComponent(range)}`),
+  /** The portfolio total at each minute/hour bar, rebuilt from Yahoo's prices when asked. */
+  intradayHistory: (range: HistoryRange, interval: string) =>
+    api.get<IntradayHistory>(`/api/portfolio/history?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}`),
 
   instruments: () => api.get<Instrument[]>("/api/instruments"),
   /** Update only: 404 if the holding was deleted meanwhile (the edit form must never re-create one). */

@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field, field_validator
 from analyzer import advisor, attachments, db, llm, prefs, research
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
 from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
-from analyzer.portfolio import RateBook, value_history
+from analyzer.portfolio import RateBook, intraday_value_history, value_history
 from analyzer.market import CURRENCY_RE, download_fund_nav, download_intraday, fund_isin, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
@@ -294,12 +294,25 @@ async def portfolio_refresh(user: str = Depends(auth.require_user)):
 
 
 RANGE_DAYS = {"1W": 8, "1M": 31, "3M": 92, "6M": 183, "1Y": 366, "3Y": 1096, "ALL": None}
+# Intraday intervals each chart range offers (holding and portfolio charts): only what Yahoo serves for that
+# span (1-minute bars for 7 days, up to 30 minutes for 60, hourly for 730). Daily ("1d") is the stored prices.
+CHART_INTERVALS = {"1W": ("1m", "5m", "15m", "30m", "1h"), "1M": ("5m", "15m", "30m", "1h", "4h"),
+                   "3M": ("1h", "4h"), "6M": ("1h", "4h"), "1Y": ("1h", "4h")}
 
 
 @app.get("/api/portfolio/history")
 async def portfolio_history(range: Literal["1W", "1M", "3M", "6M", "1Y", "3Y", "ALL"] = "1Y",
+                            interval: Literal["1m", "5m", "15m", "30m", "1h", "4h", "1d"] = "1d",
                             user: str = Depends(auth.require_user)):
-    return jsonable({"range": range, **await asyncio.to_thread(value_history, RANGE_DAYS[range], db.base_currency())})
+    """Daily (stored) by default; a minute/hour interval rebuilds the total from Yahoo's bars when asked."""
+    if interval == "1d":
+        return jsonable({"range": range, "interval": interval, **await asyncio.to_thread(value_history, RANGE_DAYS[range], db.base_currency())})
+    if interval not in CHART_INTERVALS.get(range, ()):
+        raise HTTPException(400, f"Yahoo has no {interval} prices for a {range} chart.")
+    result = await asyncio.to_thread(intraday_value_history, RANGE_DAYS[range], interval, db.base_currency())
+    if result.get("error"):
+        raise HTTPException(502 if "Yahoo returned" in result["error"] else 400, result["error"])
+    return jsonable({"range": range, "interval": interval, **result})
 
 
 @app.get("/api/stream")
@@ -431,6 +444,10 @@ async def instrument_save(body: InstrumentBody, create: bool = False, update: bo
             raise HTTPException(409, "This holding has transactions: its currency and price divisor cannot change.")
     db.upsert_instrument(row)
     await hub.recompute()
+    raw_old = None if match.empty else match.iloc[0]["market_symbol"]
+    old_symbol = None if match.empty else ("" if pd.isna(raw_old) else str(raw_old).strip())  # a stored NULL reads as NaN
+    if old_symbol != str(row.get("market_symbol") or "").strip():  # new, or another symbol: not a notes edit
+        hub.request_refresh(row["instrument_id"].strip())  # its quote and daily history now, not an interval later
     return {"ok": True}
 
 
@@ -467,12 +484,6 @@ async def instrument_detail(instrument_id: str, user: str = Depends(auth.require
         "instrument": item, "position": row, "metrics": metrics, "scenarios": scenarios, "prices": prices,
         "price_currency": latest_price_currency(history), "lots": lots,
     })
-
-
-# Intraday intervals each chart range offers: only what Yahoo serves for that span (1-minute bars for 7 days,
-# up to 30 minutes for 60, hourly for 730). Daily ("1d") comes from the stored prices in the detail above.
-CHART_INTERVALS = {"1W": ("1m", "5m", "15m", "30m", "1h"), "1M": ("5m", "15m", "30m", "1h", "4h"),
-                   "3M": ("1h", "4h"), "6M": ("1h", "4h"), "1Y": ("1h", "4h")}
 
 
 @app.get("/api/instruments/{instrument_id}/chart")

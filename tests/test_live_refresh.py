@@ -31,6 +31,25 @@ class IntervalTests(unittest.TestCase):
         self.assertEqual(hub.seconds(), live.DEFAULT_LIVE_SECONDS)
 
 
+class RequestRefreshTests(unittest.TestCase):
+    def test_an_edited_holding_gets_its_history_again_and_quotes_keep_the_15_s_floor(self):
+        hub = live.LiveHub()
+        hub.seconds = lambda: 900  # type: ignore[method-assign]
+        hub._daily_done["daily:AAPL"] = "2026-11-25"  # done today (with the old, mistyped ticker)
+        hub._next_try["daily:AAPL"] = time.time() + 600  # or failed and backing off
+        hub._fund_done["fund:AAPL"] = time.time()
+        hub._last_quotes = time.monotonic() - 5  # quotes fetched 5 s ago
+        hub.request_refresh("AAPL")
+        self.assertNotIn("daily:AAPL", hub._daily_done)
+        self.assertNotIn("daily:AAPL", hub._next_try)
+        self.assertNotIn("fund:AAPL", hub._fund_done)
+        due = hub._last_quotes + hub.seconds() - time.monotonic()
+        self.assertTrue(9 < due <= 10.1, due)  # the next quote pass 15 s after the last one, not 15 min
+        hub._last_quotes = time.monotonic() - 3600
+        hub.request_refresh("AAPL")
+        self.assertLessEqual(hub._last_quotes + hub.seconds() - time.monotonic(), 0)  # long ago: at once
+
+
 class LoopTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.hub = live.LiveHub()

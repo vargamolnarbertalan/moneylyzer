@@ -44,6 +44,7 @@ def _default_seconds() -> int:
 DEFAULT_LIVE_SECONDS = _default_seconds()
 BACKGROUND_SECONDS = 3600  # with nobody watching: daily history, fund NAVs, benchmarks and news, hourly as before
 LOOP_ERROR_PAUSE = 15
+MIN_QUOTE_GAP = 15  # the shortest interval: a requested refresh after an edit keeps it too
 FUND_SECONDS = 3600
 FAIL_BACKOFF_SECONDS = 600
 MANUAL_MIN_GAP_SECONDS = 30
@@ -140,6 +141,20 @@ class LiveHub:
             except Exception:  # deciding failed (a locked database...): the loop must outlive it
                 log.exception("live loop error")
                 await asyncio.sleep(LOOP_ERROR_PAUSE)
+
+    def request_refresh(self, instrument_id: str) -> None:
+        """A holding was added or its symbol changed: fetch its quote and daily history on the loop's next pass,
+        not one interval later (up to 15 min), and forget that its history was already done today or failed
+        (a fixed typo, another ticker, a re-added ID). Still never two quote passes within 15 s.
+        Call from the event loop's thread (async endpoints)."""
+        for key in (f"daily:{instrument_id}", f"fund:{instrument_id}"):
+            self._daily_done.pop(key, None)
+            self._fund_done.pop(key, None)
+            self._next_try.pop(key, None)
+        now = time.monotonic()
+        self._last_quotes = min(self._last_quotes, max(self._last_quotes + MIN_QUOTE_GAP, now) - self.seconds())
+        self._last_background = float("-inf")
+        self._wake.set()
 
     def quotes_age(self) -> float:
         """Seconds since live quotes were last fetched (infinite before the first)."""

@@ -143,6 +143,131 @@ def _today() -> pd.Timestamp:
     return pd.Timestamp.today().normalize()
 
 
+def _daily_asof(series: pd.Series, grid: pd.DatetimeIndex) -> pd.Series:
+    """A stored daily series (closes or FX, naive dates) at each intraday moment: a day's close counts from
+    the end of that day, so a bar never sees a close that was not known yet."""
+    if series.empty:
+        return pd.Series(float("nan"), index=grid)
+    s = series.astype(float)
+    s = s[~s.index.duplicated(keep="last")].sort_index()
+    s.index = pd.DatetimeIndex(s.index).tz_localize("UTC") + pd.Timedelta(days=1)
+    return s.reindex(s.index.union(grid)).ffill().reindex(grid)
+
+
+def _bars_asof(frame: pd.DataFrame, grid: pd.DatetimeIndex) -> pd.Series:
+    """Intraday bars (ts, close) at each moment of the grid, the last bar carried forward."""
+    if frame.empty:
+        return pd.Series(float("nan"), index=grid)
+    s = frame.set_index("ts")["close"].astype(float)
+    s = s[~s.index.duplicated(keep="last")].sort_index()
+    return s.reindex(s.index.union(grid)).ffill().reindex(grid)
+
+
+def intraday_value_history(days: int, interval: str, base: str = "HUF") -> dict:
+    """Portfolio value at each minute/hour bar of the holdings that trade on Yahoo, in the base currency.
+
+    The moments are the holdings' own bars (FX is applied as of each one, so a currency trading overnight adds
+    no points). Holdings without Yahoo bars (funds, bonds, a ticker Yahoo had nothing for) are valued at their
+    stored daily close; units held come from the transactions by date, like the daily curve.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    from analyzer.market import download_intraday, fx_symbol
+
+    base = base.upper()
+    empty = {"currency": base, "points": [], "included": [], "daily_only": []}
+    instruments = db.get_instruments()
+    if instruments.empty:
+        return empty
+    price_ccy = db.latest_price_currencies()
+    items = [i for i in instruments.to_dict("records")
+             if not currency_mismatch(str(i["currency"]).strip().upper(), price_ccy.get(i["instrument_id"]), i.get("price_divisor"))]
+    live = [i for i in items if is_yahoo_symbol(i.get("market_symbol")) and i["asset_type"] != "government_bond"]
+    if not live:
+        return {**empty, "error": "No holding has minute or hour prices on Yahoo; the daily curve is the one to use."}
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        fetched = dict(zip([i["instrument_id"] for i in live],
+                           pool.map(lambda i: download_intraday(str(i["market_symbol"]).strip(), interval, days), live)))
+    start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days)
+    stamps = [f["ts"] for f, _ccy, err in fetched.values() if not err and not f.empty]
+    if not stamps:
+        return {**empty, "error": "Yahoo returned no minute or hour prices for your holdings. Try again in a minute."}
+    grid = pd.DatetimeIndex(pd.concat(stamps).sort_values().unique())
+    grid = grid[grid >= start]
+    if len(grid) == 0:
+        return {**empty, "error": "Yahoo returned no prices in this range."}
+
+    lots = db.get_lots()
+    all_prices = db.get_all_prices((start - pd.Timedelta(days=10)).date().isoformat())
+    by_id = {iid: g.set_index("date")["close"] for iid, g in all_prices.groupby("instrument_id", sort=False)} if not all_prices.empty else {}
+    grid_days = grid.tz_convert(None).normalize()
+
+    fx_cache: dict[str, pd.Series] = {}
+
+    def per_usd(ccy: str) -> pd.Series | None:
+        """Units of ccy per USD at each moment: intraday FX where Yahoo has it, the stored daily rate otherwise."""
+        if ccy == "USD":
+            return None
+        if ccy not in fx_cache:
+            daily = _daily_asof(db.fx_usd_series(ccy), grid)
+            frame, _c, err = download_intraday(fx_symbol(ccy), interval, days)
+            fx_cache[ccy] = daily if err else _bars_asof(frame, grid).fillna(daily)
+        return fx_cache[ccy]
+
+    series, daily_only = [], []
+    for item in items:
+        iid = item["instrument_id"]
+        currency = str(item["currency"]).strip().upper()
+        daily = _daily_asof(by_id.get(iid, pd.Series(dtype=float)), grid)
+        got = fetched.get(iid)
+        # Yahoo's bars must be in the holding's own price convention (GBp bars on a GBP holding with divisor 1
+        # would count pence as pounds): otherwise the stored daily close stands in, as for a failed download.
+        usable = got and not got[2] and not got[0].empty and not currency_mismatch(currency, got[1], item.get("price_divisor"))
+        price = _bars_asof(got[0], grid).fillna(daily) if usable else daily  # before its first bar: the last stored close
+        if price.isna().all():
+            continue
+        item_lots = lots[lots["instrument_id"] == iid]
+        if not item_lots.empty:
+            signed = item_lots["quantity"].where(item_lots["side"] != "sell", -item_lots["quantity"])
+            held = item_lots.assign(d=pd.to_datetime(item_lots["buy_date"]), signed=signed).groupby("d")["signed"].sum().cumsum().clip(lower=0.0)
+            # several bars share a day: union with the distinct days, then look each bar's day up
+            qty = pd.Series(held.reindex(held.index.union(grid_days.unique())).ffill().reindex(grid_days).fillna(0.0).to_numpy(), index=grid)
+        else:
+            qty = pd.Series(float(item.get("quantity") or 0.0), index=grid)
+        value = qty * price / float(item.get("price_divisor") or 1.0)
+        if currency != base:
+            factor = pd.Series(1.0, index=grid)
+            for ccy, power in ((base, 1), (currency, -1)):
+                fx = per_usd(ccy)
+                if fx is not None:
+                    factor = factor * fx ** power
+            if factor.isna().all():
+                continue  # no rate at all for its currency: left out, as the daily curve does
+            value = value * factor
+        # Units held 0 (before the first buy, after selling out) add nothing whatever the price, even an unknown
+        # one: without this a holding bought mid-window would cut every moment before its first price.
+        value = value.where(qty != 0, 0.0)
+        if (qty == 0).all():
+            continue
+        if iid in fetched and not usable:
+            daily_only.append(iid)  # named in the note only when it really counts, at its daily price
+        series.append(value.rename(iid))
+    if not series:
+        return {**empty, "error": "None of your holdings has a price to chart yet."}
+    # The curve starts where every included holding has a price (as the daily curve starts when data starts):
+    # summing only some of them would show a jump that is not a move (a US stock before its first bar).
+    total = pd.concat(series, axis=1).dropna().sum(axis=1)
+    if total.empty:
+        return {**empty, "error": "Your holdings' prices do not overlap in this range yet."}
+    return {
+        "currency": base,
+        "points": [{"t": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "value": round(float(v), 2)} for t, v in total.items()],
+        "included": [str(s.name) for s in series],
+        "daily_only": daily_only,
+    }
+
+
 def value_history(days: int | None, base: str = "HUF") -> dict:
     """Daily portfolio value in the base currency, rebuilt from stored closes x quantity held x stored FX.
 

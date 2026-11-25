@@ -98,7 +98,7 @@ The **Data & privacy** page in the app lists every outgoing request in detail. I
 
 - Ticker symbols and currency pairs go to Yahoo Finance (prices every minute while the app is open in a
   browser, history daily, news hourly,
-  a holding's minute or hour prices while its chart shows them, and what you type in the add-holding
+  minute or hour prices while a holding or portfolio chart shows them, and what you type in the add-holding
   search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
 - Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
   persona and investing preferences, and weights, percentage changes and whether a holding is sold out.
