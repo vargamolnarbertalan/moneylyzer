@@ -204,6 +204,8 @@ export interface AppSettings {
 
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
 export type DataLevel = "relative" | "full";
+/** What "full detail" adds, in one place for every text that describes it (server: analyzer/persona.py). */
+export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, purchase dates, platforms and holding notes";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {
@@ -253,6 +255,8 @@ export interface Preferences {
   risk: Risk;
   allow_short_term: boolean;
   language: "auto" | "en" | "hu";
+  /** Country of residence as the user wrote it; empty = the analyst infers it and asks. */
+  country: string;
   notes: string;
 }
 
@@ -279,6 +283,8 @@ export interface AdvisorShared {
   benchmarks: number;
   news_items: number;
   web_research: boolean;
+  /** Holdings whose notes were sent (full detail only). */
+  notes?: number;
 }
 
 export interface AdvisorSource {
@@ -347,6 +353,7 @@ interface RequestOptions {
 }
 
 function detailMessage(status: number, payload: unknown): string {
+  if (status === 413) return "That is too much to send at once.";
   if (payload && typeof payload === "object" && "detail" in payload) {
     const detail = (payload as { detail: unknown }).detail;
     if (typeof detail === "string") return detail;
@@ -359,7 +366,6 @@ function detailMessage(status: number, payload: unknown): string {
     }
   }
   if (status === 403) return "The server refused the request.";
-  if (status === 413) return "That file is too large.";
   if (status >= 500) return `Server error (${status}).`;
   return `Request failed (${status}).`;
 }
@@ -434,7 +440,8 @@ export const endpoints = {
   history: (range: HistoryRange) => api.get<HistoryResponse>(`/api/portfolio/history?range=${encodeURIComponent(range)}`),
 
   instruments: () => api.get<Instrument[]>("/api/instruments"),
-  saveInstrument: (body: InstrumentInput) => api.post<{ ok: boolean }>("/api/instruments", body),
+  /** Update only: 404 if the holding was deleted meanwhile (the edit form must never re-create one). */
+  saveInstrument: (body: InstrumentInput) => api.post<{ ok: boolean }>("/api/instruments?update=1", body),
   /** Create only: 409 if the ID exists (the add-holding wizard must never overwrite a holding). */
   createInstrument: (body: InstrumentInput) => api.post<{ ok: boolean }>("/api/instruments?create=1", body),
   deleteInstrument: (id: string, confirmPurchases: number) =>
@@ -469,8 +476,9 @@ export const endpoints = {
   /** View preferences synced across devices (src/prefs.ts). PATCH sets or clears (null) only the keys sent. */
   prefs: () => api.get<Record<string, unknown>>("/api/prefs"),
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
-  saveAiSettings: (body: { persona?: string; preferences?: Preferences; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
-  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string }) =>
+  saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
+  /** expected_level: the level the conversation's answers were written at (409 if the model's level changed). */
+  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
 };

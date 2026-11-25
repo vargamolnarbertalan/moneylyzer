@@ -148,6 +148,10 @@ def _claude_code(p: Provider, system: str, messages: list[dict]) -> dict:
     for m in messages[:-1]:
         transcript.append(f"<{m['role']}_turn>\n{m['content']}\n</{m['role']}_turn>")
     prompt = (("Earlier in this conversation:\n" + "\n".join(transcript) + "\n\n") if transcript else "") + messages[-1]["content"]
+    # The prompt carries text nobody here wrote (news headlines, names, platforms). An "@path" in it must
+    # never become a Claude Code file mention, so "@" goes as the look-alike FULLWIDTH COMMERCIAL AT; the
+    # answer gets "@" back (links such as medium.com/@x keep working).
+    prompt = prompt.replace("@", "＠")
     tools = "WebSearch,WebFetch" if p.web_research else ""
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     # The system prompt (persona + rules, up to ~27k characters) goes through a private temp file, not
@@ -173,7 +177,7 @@ def _claude_code(p: Provider, system: str, messages: list[dict]) -> dict:
         except OSError as exc:
             log.warning("could not delete %s: %s", system_file, exc)
     try:
-        text = parse_cli_output(done.returncode, done.stdout, done.stderr)
+        text = parse_cli_output(done.returncode, done.stdout, done.stderr).replace("＠", "@")
     except RuntimeError as exc:
         raise LLMError(str(exc)) from None
     return {"text": text, "model": p.model, "sources": _links(text)}
@@ -187,7 +191,11 @@ def _anthropic(p: Provider, system: str, messages: list[dict]) -> dict:
     if not key:
         raise LLMError("No API key saved for this provider.")
     client = anthropic.Anthropic(api_key=key, base_url=p.base_url or None, timeout=TIMEOUT_SECONDS, max_retries=2)
-    params: dict = {"model": p.model, "max_tokens": MAX_TOKENS, "system": system,
+    # The system prompt holds nothing time-dependent, so it is marked for caching: a follow-up within the
+    # cache lifetime reads it instead of paying for it again (below the model's minimum cacheable length
+    # it is simply not cached).
+    params: dict = {"model": p.model, "max_tokens": MAX_TOKENS,
+                    "system": [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}],
                     "messages": [{"role": m["role"], "content": m["content"]} for m in messages]}
     if p.model in EFFORT_MODELS:
         params["output_config"] = {"effort": p.effort}

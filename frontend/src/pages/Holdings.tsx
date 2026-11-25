@@ -77,9 +77,9 @@ export function HoldingsPage() {
   const formRef = useRef<HTMLFormElement | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
 
+  // Adding goes through the wizard; this form only edits an existing holding.
   const open = (mode: "add" | { edit: Instrument }) => {
     if (mode === "add") {
-      setForm(EMPTY);
       setEditing({ mode: "add" });
     } else {
       setForm(toForm(mode.edit));
@@ -249,10 +249,10 @@ export function HoldingsPage() {
         {editing?.mode === "edit" && (
           <HoldingForm
             formRef={formRef}
-            mode={editing.mode}
             form={form}
             setForm={setForm}
             onCancel={() => setEditing(null)}
+            onGone={list.reload}
             onSaved={() => {
               setEditing(null);
               list.reload();
@@ -342,16 +342,18 @@ export function HoldingsPage() {
   );
 }
 
+/** Edits an existing holding (adding one is AddHoldingWizard's job). */
 interface HoldingFormProps {
   formRef: RefObject<HTMLFormElement | null>;
-  mode: "add" | "edit";
   form: FormState;
   setForm: (f: FormState) => void;
   onCancel: () => void;
   onSaved: () => void;
+  /** The holding no longer exists (404). */
+  onGone: () => void;
 }
 
-function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: HoldingFormProps) {
+function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: HoldingFormProps) {
   const uid = useId();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -366,7 +368,6 @@ function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: Holdin
     const avg = parseDecimal(form.avg_cost);
     const div = parseDecimal(form.price_divisor);
     const currency = form.currency.trim().toUpperCase();
-    if (!id) return setError("Enter an instrument ID.");
     if (!form.name.trim()) return setError("Enter a name.");
     if (q === null || q < 0) return setError("Quantity must be a number, zero or more.");
     if (form.avg_cost.trim() !== "" && (avg === null || avg < 0)) return setError("Average cost must be a number, or leave it empty.");
@@ -388,6 +389,8 @@ function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: Holdin
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
+      // deleted on another device: the message stays here, the list drops the row
+      if (err instanceof ApiError && err.status === 404) onGone();
     } finally {
       setBusy(false);
     }
@@ -395,14 +398,14 @@ function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: Holdin
 
   return (
     <Card as="section" aria-labelledby={fid("h")}>
-      <CardHeader id={fid("h")} title={mode === "add" ? "Add a holding" : `Edit ${form.instrument_id}`} />
+      <CardHeader id={fid("h")} title={`Edit ${form.instrument_id}`} />
       <form ref={formRef} className="form" onSubmit={submit} noValidate>
         <div className="form-grid">
           <div className="field">
             <label htmlFor={fid("id")}>Instrument ID</label>
-            <input id={fid("id")} value={form.instrument_id} onChange={set("instrument_id")} disabled={mode === "edit"} autoComplete="off" spellCheck={false} required aria-describedby={fid("idh")} />
+            <input id={fid("id")} value={form.instrument_id} disabled autoComplete="off" spellCheck={false} aria-describedby={fid("idh")} />
             <span id={fid("idh")} className="help">
-              {mode === "edit" ? "The ID cannot change." : "Your own short key, for example VWCE or OTP-B."}
+              The ID cannot change.
             </span>
           </div>
           <div className="field">
@@ -453,7 +456,7 @@ function HoldingForm({ formRef, mode, form, setForm, onCancel, onSaved }: Holdin
         <div className="btn-row">
           <button type="submit" className="btn" disabled={busy}>
             {busy && <span className="spinner" aria-hidden="true" />}
-            {busy ? "Saving…" : mode === "add" ? "Add holding" : "Save changes"}
+            {busy ? "Saving…" : "Save changes"}
           </button>
           <button type="button" className="btn ghost" onClick={onCancel} disabled={busy}>
             Cancel

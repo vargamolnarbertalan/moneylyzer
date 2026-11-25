@@ -178,6 +178,8 @@ function LegalNotice() {
 }
 
 function PasswordForm() {
+  const authStatus = useAuth().status;
+  const account = authStatus.kind === "in" ? authStatus.user : "";
   const uid = useId();
   const [oldPw, setOldPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -210,6 +212,8 @@ function PasswordForm() {
     <Card as="section" aria-labelledby={`${uid}h`}>
       <CardHeader id={`${uid}h`} title="Change password" />
       <form className="form" onSubmit={submit} noValidate>
+        {/* For password managers: which account this new password belongs to (not shown, not focusable). */}
+        <input type="text" name="username" autoComplete="username" value={account} readOnly hidden aria-hidden="true" />
         <div className="field">
           <label htmlFor={`${uid}o`}>Current password</label>
           <input id={`${uid}o`} type="password" autoComplete="current-password" value={oldPw} onChange={(e) => setOldPw(e.target.value)} required />

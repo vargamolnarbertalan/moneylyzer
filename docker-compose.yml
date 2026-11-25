@@ -9,6 +9,10 @@ services:
       - "8080:8080"
     volumes:
       - lia-data:/data        # database, Claude login, caches
+    # Lets the app reach a local model (Ollama, LM Studio) on this computer as host.docker.internal,
+    # also on Linux, where Docker Desktop does not add the name.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     # environment:
     #   LIA_DONATE_URL: ""      # hide the "Buy me a coffee" link
     #   LIA_COOKIE_SECURE: "1"  # only behind an HTTPS reverse proxy

@@ -1,6 +1,7 @@
 // The one table used everywhere: sortable headers, filter box, select filters, "N of M", empty-state row.
 // It renders a real <table>; the layout variants (card rows, stacked cards on phones) are CSS classes.
 import { Fragment, useId, type ReactNode } from "react";
+import { useFrozenOrder } from "../useFrozenOrder";
 import { ArrowDown, ArrowUp, ArrowUpDown, X } from "lucide-react";
 import { Link } from "../router";
 import { Select } from "./Select";
@@ -128,6 +129,9 @@ interface DataTableProps<T> {
 
 export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", className, rowClassName, rowHref, expanded, phoneSort, noFilter }: DataTableProps<T>) {
   const colCount = columns.length;
+  // Re-sorting live rows must not drop focus from a row link (useFrozenOrder); the header sort
+  // buttons are outside the body, so a sort the user asks for always applies.
+  const { ordered, paused, onFocus, onBlur, onPointerDown } = useFrozenOrder(sf.view, rowKey);
   // A filter box and a count are clutter on a handful of rows (one purchase, three scenarios).
   // A filter still in force (a saved one) always shows the bar, so it can be cleared.
   const showBar = sf.isFiltered || (!noFilter && sf.total > SMALL_LIST);
@@ -142,7 +146,7 @@ export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", cl
                 const sortable = !!c.sortKey;
                 const cls = [c.className, c.align === "right" ? "r" : ""].filter(Boolean).join(" ");
                 return (
-                  <th key={c.key} role="columnheader" scope="col" className={cls || undefined} aria-sort={sortable ? sf.ariaSort(c.sortKey as string) : undefined}>
+                  <th key={c.key} role="columnheader" scope="col" className={cls || undefined} aria-sort={sortable && !paused ? sf.ariaSort(c.sortKey as string) : undefined}>
                     {sortable ? (
                       <button type="button" className="th-btn" onClick={() => sf.toggleSort(c.sortKey as string)}>
                         <span className={c.hideHeader ? "sr-only" : undefined}>{c.header}</span>
@@ -158,8 +162,8 @@ export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", cl
               })}
             </tr>
           </thead>
-          <tbody role="rowgroup">
-            {sf.view.map((row) => {
+          <tbody role="rowgroup" onFocus={onFocus} onBlur={onBlur} onPointerDown={onPointerDown}>
+            {ordered.map((row) => {
               const href = rowHref?.(row);
               const extra = expanded?.(row);
               const k = rowKey(row);

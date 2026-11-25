@@ -93,8 +93,9 @@ The **Data & privacy** page in the app lists every outgoing request in detail. I
 
 - Ticker symbols and currency pairs go to Yahoo Finance (prices every 60 s, history daily, news hourly,
   and what you type in the add-holding search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
-- Your question goes to the AI model you connected, only when you ask, with weights and percentage
-  changes. Amounts, quantities and purchase dates are sent only to a model you set to full detail.
+- Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
+  persona and investing preferences, and weights and percentage changes. Amounts, quantities, costs,
+  purchase dates, platforms and holding notes are sent only to a model you set to full detail.
 - Never sent anywhere: the database, your account, your CSV files. The app has no telemetry.
 
 ## Your data and backups

@@ -253,6 +253,66 @@ class ApiTests(unittest.TestCase):
         self.assertTrue(r.headers["content-type"].startswith("image/svg+xml"))
         self.assertEqual(r.content, (main.STATIC_DIR / "logo.svg").read_bytes())
 
+    def test_oversized_request_bodies_are_refused(self):
+        self.setup_account()
+        big = '{"theme": "' + "x" * (2 * 1024 * 1024) + '"}'
+        raw = {**H, "Content-Type": "application/json"}
+        self.assertEqual(self.client.patch("/api/prefs", content=big, headers=raw).status_code, 413)
+        # a chunked body (no Content-Length) is counted as it streams in
+        chunks = (b"x" * 65536 for _ in range(40))
+        self.assertEqual(self.client.patch("/api/prefs", content=chunks, headers=raw).status_code, 413)
+        # the limit is chosen by route, not by a content type the client picks
+        multi = {**H, "Content-Type": "multipart/form-data; boundary=x"}
+        self.assertEqual(self.client.patch("/api/prefs", content=b"x" * (3 * 1024 * 1024), headers=multi).status_code, 413)
+        # uploads get room for a 5 MB CSV; past that they are refused too
+        two_mib = b"a,b\n" + b"1,2\n" * (512 * 1024)
+        r = self.client.post("/api/import/holdings", files={"file": ("h.csv", two_mib, "text/csv")}, headers=H)
+        self.assertNotEqual(r.status_code, 413)
+        r = self.client.post("/api/import/holdings", files={"file": ("h.csv", b"x" * (7 * 1024 * 1024), "text/csv")}, headers=H)
+        self.assertEqual(r.status_code, 413)
+        # an AI question with a long conversation behind it is not cut off at 1 MiB (422: history is no list)
+        ask = '{"question": "hi", "history": "' + "x" * (2 * 1024 * 1024) + '"}'
+        self.assertEqual(self.client.post("/api/advisor/ask", content=ask, headers=raw).status_code, 422)
+        big_ask = '{"question": "hi", "history": "' + "x" * (5 * 1024 * 1024) + '"}'
+        r = self.client.post("/api/advisor/ask", content=big_ask, headers=raw)
+        self.assertEqual(r.status_code, 413)
+        self.assertIn("default-src 'self'", r.headers["content-security-policy"])  # a 413 keeps the headers
+        # an endpoint that reads no body never acts on a refused request
+        self.client.post("/api/instruments?create=1", headers=H,
+                         json={"instrument_id": "KEEP", "name": "Keep", "asset_type": "etf", "quantity": 1, "currency": "EUR"})
+        r = self.client.request("DELETE", "/api/instruments/KEEP?confirm_purchases=0", content=b"x" * (2 * 1024 * 1024), headers=raw)
+        self.assertEqual(r.status_code, 413)
+        self.assertTrue(any(i["instrument_id"] == "KEEP" for i in self.client.get("/api/instruments", headers=H).json()))
+        # signed out, the larger limits do not apply: no megabytes parsed before the login check
+        self.client.cookies.clear()
+        self.assertEqual(self.client.post("/api/advisor/ask", content=ask, headers=raw).status_code, 413)
+        # normal requests are untouched (signed in again)
+        r = self.client.post("/api/auth/login", json={"username": "owner", "password": "correct horse 1"}, headers=H)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.patch("/api/prefs", json={"theme": "light"}, headers=H).status_code, 200)
+
+    def test_a_conversation_at_another_sharing_level_is_refused(self):
+        self.setup_account()
+        body = {"question": "And now?", "history": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}],
+                "expected_level": "full"}  # the built-in model is on relative figures
+        with mock.patch.object(live.hub, "snapshot", {"rows": [], "totals": {}}), \
+             mock.patch("analyzer.advisor.complete") as sent:
+            r = self.client.post("/api/advisor/ask", json=body, headers=H)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("Start a new conversation", r.json()["detail"])
+        sent.assert_not_called()
+
+    def test_edit_form_never_recreates_a_deleted_holding(self):
+        self.setup_account()
+        body = {"instrument_id": "GONE", "name": "Gone", "asset_type": "etf", "quantity": 1, "currency": "EUR"}
+        r = self.client.post("/api/instruments?update=1", json=body, headers=H)
+        self.assertEqual(r.status_code, 404)
+        self.assertFalse(any(i["instrument_id"] == "GONE" for i in self.client.get("/api/instruments", headers=H).json()))
+        self.assertEqual(self.client.post("/api/instruments?create=1", json=body, headers=H).status_code, 200)
+        self.assertEqual(self.client.post("/api/instruments?update=1", json={**body, "name": "Kept"}, headers=H).status_code, 200)
+        names = {i["instrument_id"]: i["name"] for i in self.client.get("/api/instruments", headers=H).json()}
+        self.assertEqual(names["GONE"], "Kept")
+
     def test_security_headers(self):
         r = self.client.get("/api/health")
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])

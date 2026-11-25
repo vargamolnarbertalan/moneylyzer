@@ -208,6 +208,20 @@ code {
   color: var(--muted);
   flex: none;
 }
+/* While the column widens from the rail, the brand gives way (clipped) so the toggle just clicked
+   stays in view instead of being pushed past the edge. */
+.side-head .brand {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* If the name does not fit (mid-animation, or with larger user text spacing) it ends in an ellipsis
+   rather than a hard cut, so the cut is visible; screen readers still get the whole name. */
+.side-head .brand span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .side-toggle:hover:not(:disabled) {
   color: var(--text);
 }
@@ -2395,6 +2409,21 @@ input[type="radio"],
 }
 .chip:disabled {
   opacity: 0.55;
+}
+.chip.chip-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--muted);
+}
+.chip.chip-more svg {
+  width: 14px;
+  height: 14px;
+}
+.chip.chip-more svg.flip {
+  transform: rotate(180deg);
 }
 .advisor-layout {
   display: grid;

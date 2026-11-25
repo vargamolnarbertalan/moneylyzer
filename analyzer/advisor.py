@@ -2,12 +2,15 @@
 
 Privacy: the context is built per provider data level.
 - "relative" (default): names, tickers, types, currencies, weights, % changes, indicators.
-- "full": additionally amounts in the reporting currency, quantities, average costs and purchase lots with dates.
+- "full": additionally amounts in the reporting currency, quantities, average costs, purchase lots with dates
+  and platforms, holding notes and data checks.
 """
 from __future__ import annotations
 
 import json
+import math
 import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -91,14 +94,14 @@ def save_provider(data: dict, api_key: str | None) -> str:
         data = {**data, "kind": "claude_code", "base_url": ""}  # the built-in route can change model/settings only
     p = Provider(id=pid, name=str(data.get("name") or "").strip()[:80] or "Model", kind=data["kind"],
                  model=str(data.get("model") or "").strip(), base_url=str(data.get("base_url") or "").strip(),
-                 data_level=data.get("data_level", "relative"), web_research=bool(data.get("web_research")),
+                 data_level="relative", web_research=bool(data.get("web_research")),
                  effort=data.get("effort", "high"))
     validate(p)
     with db.connect() as conn:
         conn.execute(
             "INSERT INTO ai_providers(id, name, kind, model, base_url, data_level, web_research, effort) "
             "VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name, kind=excluded.kind, "
-            "model=excluded.model, base_url=excluded.base_url, data_level=excluded.data_level, "
+            "model=excluded.model, base_url=excluded.base_url, "
             "web_research=excluded.web_research, effort=excluded.effort",
             (p.id, p.name, p.kind, p.model, p.base_url, p.data_level, int(p.web_research), p.effort),
         )
@@ -119,7 +122,8 @@ def delete_provider(provider_id: str) -> None:
 
 
 def set_data_level(provider_id: str, level: str) -> None:
-    """What a model may see: 'relative' (weights, % changes) or 'full' (amounts, quantities, dates)."""
+    """What a model may see: 'relative' (weights, % changes) or 'full' (also amounts, quantities, costs, dates,
+    platforms and holding notes)."""
     if level not in ("relative", "full"):
         raise ValueError("data_level must be relative or full")
     with db.connect() as conn:
@@ -142,6 +146,11 @@ def get_settings() -> dict:
     rules = normalize_rules(json.loads(rows.get("rules") or "[]"))
     return {"persona": persona, "is_default_persona": persona.strip() == DEFAULT_PERSONA.strip(),
             "default_persona": DEFAULT_PERSONA, "preferences": prefs, "rules": rules}
+
+
+class LevelChanged(Exception):
+    """The conversation was written at another sharing level than the model now has: its earlier answers
+    (perhaps with amounts) must not reach a model that may only see relative figures."""
 
 
 class RulesConflict(ValueError):
@@ -168,8 +177,11 @@ def save_settings(persona: str | None, preferences: dict | None, rules: list[str
             else:
                 conn.execute("INSERT INTO ai_settings VALUES ('persona', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (text[:20000],))
         if preferences is not None:
+            # merged over the stored ones: a save that lacks a key (an older tab, a partial update) keeps it
+            row = conn.execute("SELECT value FROM ai_settings WHERE key='preferences'").fetchone()
+            merged = {**normalize_preferences(json.loads(row[0]) if row else {}), **preferences}
             conn.execute("INSERT INTO ai_settings VALUES ('preferences', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                         (json.dumps(normalize_preferences(preferences)),))
+                         (json.dumps(normalize_preferences(merged)),))
         if rules is not None:
             kept = normalize_rules(rules)
             if kept:
@@ -185,16 +197,33 @@ RELATIVE_ROW_KEYS = ("id", "name", "type", "currency", "symbol", "weight", "pnl_
 FULL_ROW_KEYS = RELATIVE_ROW_KEYS + ("quantity", "price", "avg_cost", "value_base", "cost_base", "pnl_base", "today_base")
 
 
+def _text_or_none(value) -> str | None:
+    """Free text from a DataFrame row: NaN (an old row without the column) and blanks become None."""
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _r(x, nd=4):
-    return round(x, nd) if isinstance(x, float) else x
+    """Rounded floats; NaN (a missing value in a DataFrame column) becomes None, so the block stays valid JSON."""
+    if isinstance(x, float):
+        return None if math.isnan(x) else round(x, nd)
+    return x
 
 
 def build_context(snapshot: dict, level: str, instrument_id: str | None = None) -> dict:
     rows = snapshot.get("rows", [])
     keys = FULL_ROW_KEYS if level == "full" else RELATIVE_ROW_KEYS
     holdings, series = [], {}
+    instruments = {str(i["instrument_id"]): i for i in db.get_instruments().to_dict("records")}
     for r in rows:
         item = {k: _r(r.get(k)) for k in keys}
+        inst = instruments.get(str(r["id"]), {})
+        item["price_divisor"] = _r(float(inst.get("price_divisor") or 1))
+        if level == "full":
+            notes = _text_or_none(inst.get("notes"))
+            if notes:
+                item["notes"] = " ".join(notes.split())[:1000]  # the owner's own words; CSV imports have no cap
+            if r.get("check"):
+                item["check"] = r["check"]  # data problems (may quote units), full detail only
         hist = db.get_prices(r["id"])
         if not hist.empty:
             m = analyze_history({"asset_type": r["type"]}, hist)
@@ -204,8 +233,9 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
             series[f"{r['id']} ({r['name'][:24]})"] = s[~s.index.duplicated(keep="last")]
         if level == "full":
             lots = db.get_lots(r["id"])
-            item["purchases"] = [{"date": l["buy_date"], "quantity": l["quantity"], "unit_price": l["unit_price"],
-                                  "paid_amount": l["paid_amount"], "paid_currency": l["paid_currency"]}
+            item["purchases"] = [{"date": l["buy_date"], "quantity": _r(l["quantity"]), "unit_price": _r(l["unit_price"]),
+                                  "paid_amount": _r(l["paid_amount"]), "paid_currency": _text_or_none(l["paid_currency"]),
+                                  "platform": _text_or_none(l.get("platform"))}
                                  for l in lots.to_dict("records")]
         holdings.append(item)
     totals = snapshot.get("totals", {})
@@ -235,32 +265,42 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
 def render_context(ctx: dict) -> str:
     """Context as tagged blocks; the persona tells the model these blocks are data, not instructions."""
     news = ctx.pop("news", [])
-    body = json.dumps({k: v for k, v in ctx.items()}, ensure_ascii=False, default=str)
+    # "<" escaped (still valid JSON), so a name or platform cannot close the data block early
+    body = json.dumps({k: v for k, v in ctx.items()}, ensure_ascii=False, default=str).replace("<", "\\u003c")
     news_lines = "\n".join(
         f"- [{n.get('published') or 'undated'}] {n['source']}: {n['title']} — {n.get('summary') or ''} ({n['url']})"
         for n in news
-    )
+    ).replace("<", "＜")  # third-party text: a decoded "</news>" must not end the block
     return (f"<portfolio_and_market>\n{body}\n</portfolio_and_market>\n"
             f"<news>\n{news_lines or '(no recent items)'}\n</news>")
 
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
-        instrument_id: str | None = None) -> dict:
+        instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None) -> dict:
     question = (question or "").strip()
     if not question:
         raise ValueError("Ask a question first.")
     if len(question) > MAX_QUESTION_CHARS:
         raise ValueError(f"Keep the question under {MAX_QUESTION_CHARS} characters.")
     provider = get_provider(provider_id)
+    # A conversation with answers must say which level they were written at, and match the model's level
+    # (a tab with older code sends none). A new conversation is never refused.
+    answered = any(m.get("role") == "assistant" for m in (history or []))
+    if answered and expected_level != provider.data_level:
+        raise LevelChanged("This model's sharing level changed since this conversation started. "
+                           "Start a new conversation to go on.")
     settings = get_settings()
     ctx = build_context(snapshot, provider.data_level, instrument_id)
     shared = {"data_level": provider.data_level, "holdings": len(ctx["portfolio"]["holdings"]),
+              "notes": sum(1 for h in ctx["portfolio"]["holdings"] if h.get("notes")),
               "benchmarks": len(ctx["market"]), "news_items": len(ctx["news"]), "web_research": provider.can_browse}
     system = compose_system_prompt(settings["persona"], settings["preferences"], provider.data_level, provider.can_browse,
                                    rules=settings["rules"])
     turns = [m for m in (history or []) if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     turns = turns[-2 * MAX_HISTORY_TURNS:]
     focus = f"\nFocus on holding {instrument_id}." if instrument_id else ""
-    user_msg = f"{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
+    # The time travels with the question, not in the system prompt, which stays a stable cacheable prefix.
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
+    user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}])
     return {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind}, "shared": shared}
