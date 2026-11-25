@@ -19,6 +19,7 @@ export function ClaudeConnect() {
   const s = current ?? status.data;
 
   const connect = async () => {
+    const neededDownload = s?.installed === false;
     setBusy("login");
     setError(null);
     setSuccess(null);
@@ -29,6 +30,10 @@ export function ClaudeConnect() {
       setError(errorMessage(err));
     } finally {
       setBusy(null);
+      // The first Connect downloads Claude Code (even when sign-in then fails): drop the download note.
+      // A late answer never overrides a sign-in that completed meanwhile.
+      if (neededDownload)
+        endpoints.claudeStatus().then((fresh) => setCurrent((prev) => (prev?.loggedIn ? prev : fresh)), () => undefined);
     }
   };
 
@@ -103,16 +108,23 @@ export function ClaudeConnect() {
       </>
     );
   } else if (!s.available) {
-    body = <Alert tone="warn">Claude Code is not installed on this server, so Claude cannot be connected here.</Alert>;
+    body = (
+      <Alert tone="warn">
+        Claude Code is not installed on this server, so Claude cannot be connected here.
+        {s.reason && <> {s.reason}</>}
+      </Alert>
+    );
   } else {
+    const needsDownload = s.installed === false;
     body = (
       <>
         <p className="sub">Not connected. Connecting uses your Claude subscription; no API key is stored.</p>
+        {needsDownload && s.install_note && url === null && <p className="sub">{s.install_note}</p>}
         {url === null ? (
           <div className="btn-row" style={{ marginTop: 12 }}>
             <button type="button" className="btn" onClick={connect} disabled={busy !== null}>
               {busy === "login" && <span className="spinner" aria-hidden="true" />}
-              {busy === "login" ? "Connecting…" : "Connect Claude"}
+              {busy === "login" ? (needsDownload ? "Downloading Claude Code…" : "Connecting…") : "Connect Claude"}
             </button>
           </div>
         ) : (

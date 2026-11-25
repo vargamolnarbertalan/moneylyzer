@@ -2021,6 +2021,13 @@ input:-webkit-autofill {
   grid-template-columns: 28px minmax(0, 1fr);
   gap: 4px 10px;
 }
+/* Everything after the step text (a button, a form) stays in the content column, not under the number. */
+.steps > li > * {
+  grid-column: 2;
+}
+.steps > li > .btn {
+  justify-self: start;
+}
 .steps > li::before {
   content: counter(step);
   width: 24px;

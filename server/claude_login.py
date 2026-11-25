@@ -42,13 +42,21 @@ class _Session:
                 cli = claude_install.install()  # first use: ~130 MB download, checksum-verified
             except Exception as exc:
                 raise LoginError(f"Could not install Claude Code: {exc}") from None
-        master, slave = pty.openpty()
         env = cli_environment()
         env["BROWSER"] = "true"  # no browser in the container; the URL is shown in the dashboard instead
-        self.proc = subprocess.Popen(
-            [cli, "auth", "login", "--claudeai"],
-            stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True, start_new_session=True,
-        )
+        try:
+            master, slave = pty.openpty()
+        except OSError as exc:
+            raise LoginError(f"Could not start Claude Code: {exc}") from None
+        try:
+            self.proc = subprocess.Popen(
+                [cli, "auth", "login", "--claudeai"],
+                stdin=slave, stdout=slave, stderr=slave, env=env, close_fds=True, start_new_session=True,
+            )
+        except OSError as exc:  # e.g. a binary built for another CPU or C library
+            os.close(master)
+            os.close(slave)
+            raise LoginError(f"Could not start Claude Code: {exc}") from None
         os.close(slave)
         self.master = master
         self.buffer = ""
@@ -141,16 +149,22 @@ def status() -> dict:
     """`claude auth status --json`, reduced to what the UI needs (no tokens)."""
     cli = find_claude_cli()
     if cli is None:
-        return {"available": False, "installed": False, "loggedIn": False,
-                "install_note": f"Claude Code {claude_install.VERSION} (~130 MB) is downloaded from npm when you click Connect."}
+        # Not downloaded yet is the normal first state in Docker: Connect installs it, so it still counts as available.
+        blocker = claude_install.install_blocker()
+        if blocker:
+            return {"available": False, "installed": False, "loggedIn": False, "reason": blocker}
+        return {"available": True, "installed": False, "loggedIn": False,
+                "install_note": f"Connecting the first time downloads Claude Code {claude_install.VERSION} "
+                                "(about 130 MB, checksum-verified) from npm onto this server. It happens once."}
     try:
         out = subprocess.run([cli, "auth", "status", "--json"], capture_output=True, text=True, timeout=20,
                              env=cli_environment())
         data = json.loads(out.stdout or "{}")
     except Exception as exc:
-        return {"available": True, "loggedIn": False, "error": str(exc)}
+        return {"available": True, "installed": True, "loggedIn": False, "error": str(exc)}
     return {
         "available": True,
+        "installed": True,
         "loggedIn": bool(data.get("loggedIn")),
         "authMethod": data.get("authMethod"),
         "subscription": data.get("subscriptionType") or data.get("subscription"),

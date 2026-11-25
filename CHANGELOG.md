@@ -8,6 +8,7 @@
 - Transactions CSV: an optional `side` column (`buy` or `sell`, empty means buy, so older files still work). Existing data is migrated automatically; every earlier row is a buy.
 - AI analyst: with full detail it sees each transaction's side and each holding's realized P/L; both detail levels see whether a holding is closed (sold out).
 - A holding whose units come only from its holding record (no transactions yet) cannot be sold from: the Sell option appears once a purchase is recorded. A CSV that lists the newest rows first, with a sale above the buy it sells, imports like an oldest-first one.
+- Docker: the Connect Claude button now shows on a fresh install. Since 1.0.0 the app hid it until Claude Code was downloaded, and only that button downloads it. A data folder Claude Code cannot be installed into or run from now says why, and a Claude Code that fails to start gives its error instead of "Server error". The card now says the first connect downloads Claude Code once (about 130 MB), and the "Open the sign-in page" button sits under its step instead of spilling out of the card.
 - Upgrade note: download a backup before upgrading (Settings → Your data). The database is migrated in place, and an older version knows nothing about sells: if you go back to it after recording a sale, it reads that sale as a purchase.
 
 ## 1.1.2
