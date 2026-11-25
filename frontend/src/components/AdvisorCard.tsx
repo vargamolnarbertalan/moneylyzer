@@ -1,10 +1,12 @@
 import { useId, useState, type FormEvent } from "react";
-import { QUICK_PROMPTS, queueQuestion } from "../advisor";
-import { RELATIVE_ITEMS } from "../api";
+import { QUICK_PROMPTS, clearChat, loadChat, queueQuestion, saveChat, type Chat } from "../advisor";
+import { RELATIVE_ITEMS, endpoints } from "../api";
 import { ShieldCheck, Sparkles } from "lucide-react";
+import { useResource } from "../hooks";
 import { Link, navigate } from "../router";
 import { AiMark } from "./AiMark";
 import { Card } from "./Card";
+import { ChatPickers, withEffort, chatModel } from "./ai/ChatPickers";
 
 const CHIPS = QUICK_PROMPTS.slice(0, 3);
 
@@ -12,6 +14,15 @@ const CHIPS = QUICK_PROMPTS.slice(0, 3);
 export function AdvisorCard({ className }: { className?: string }) {
   const uid = useId();
   const [text, setText] = useState("");
+  // The same conversation the AI analyst page continues: a model or effort picked here is what answers there.
+  const providers = useResource(() => endpoints.aiProviders(), []);
+  const [chat, setChatState] = useState<Chat>(() => loadChat());
+  const setChat = (next: Chat) => {
+    saveChat(next);
+    setChatState(next);
+  };
+  const list = providers.data ?? [];
+  const { selected } = chatModel(chat, list);
 
   const go = (question: string) => {
     const q = question.trim();
@@ -33,6 +44,17 @@ export function AdvisorCard({ className }: { className?: string }) {
         </div>
         <span className="tag">online · on send</span>
       </div>
+      <ChatPickers
+        chat={chat}
+        list={list}
+        loading={providers.loading}
+        className="compact"
+        onModel={(v) => {
+          clearChat(); // another model starts a new conversation, as on the AI analyst page
+          setChat({ providerId: v, messages: [] });
+        }}
+        onEffort={(v) => setChat(withEffort(chat, selected, v))}
+      />
       <form className="advisor-ask" onSubmit={submit}>
         <label className="sr-only" htmlFor={`${uid}q`}>
           Ask about your portfolio

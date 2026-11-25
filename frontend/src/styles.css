@@ -2337,6 +2337,24 @@ input[type="radio"],
   gap: 10px;
   margin-top: 12px;
 }
+/* the Overview card's model and effort, above its question box */
+.chat-pickers.compact {
+  margin-top: 12px;
+}
+/* above the AI analyst composer: which model and effort the next question goes to */
+.composer-model {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.composer-model b {
+  color: var(--text);
+  font-weight: 600;
+}
 /* Ask: a neutral button until there is a question (a faded gradient read as broken). */
 .send-btn:disabled,
 .advisor-ask .ask-btn:disabled {
