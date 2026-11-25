@@ -25,7 +25,7 @@ from analyzer import advisor, attachments, db, llm, prefs, research
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
 from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
 from analyzer.portfolio import RateBook, value_history
-from analyzer.market import CURRENCY_RE, download_fund_nav, fund_isin, fx_symbol, live_quote, search_instruments
+from analyzer.market import CURRENCY_RE, download_fund_nav, download_intraday, fund_isin, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
 from server import __version__, auth, claude_login
@@ -448,6 +448,32 @@ async def instrument_detail(instrument_id: str, user: str = Depends(auth.require
         "instrument": item, "position": row, "metrics": metrics, "scenarios": scenarios, "prices": prices,
         "price_currency": latest_price_currency(history), "lots": lots,
     })
+
+
+# Intraday intervals each chart range offers: only what Yahoo serves for that span (1-minute bars for 7 days,
+# up to 30 minutes for 60, hourly for 730). Daily ("1d") comes from the stored prices in the detail above.
+CHART_INTERVALS = {"1W": ("1m", "5m", "15m", "30m", "1h"), "1M": ("5m", "15m", "30m", "1h", "4h"),
+                   "3M": ("1h", "4h"), "6M": ("1h", "4h"), "1Y": ("1h", "4h")}
+
+
+@app.get("/api/instruments/{instrument_id}/chart")
+async def instrument_chart(instrument_id: str, range: Literal["1W", "1M", "3M", "6M", "1Y"],
+                           interval: Literal["1m", "5m", "15m", "30m", "1h", "4h"], user: str = Depends(auth.require_user)):
+    """Intraday prices for one holding's chart, fetched from Yahoo when asked (never stored)."""
+    if interval not in CHART_INTERVALS[range]:
+        raise HTTPException(400, f"Yahoo has no {interval} prices for a {range} chart.")
+    items = db.get_instruments()
+    match = items[items["instrument_id"] == instrument_id]
+    if match.empty:
+        raise HTTPException(404, "No such holding.")
+    symbol = match.iloc[0]["market_symbol"]
+    if not is_yahoo_symbol(symbol):
+        raise HTTPException(400, "Only daily prices are available for this holding.")
+    frame, currency, error = await asyncio.to_thread(download_intraday, str(symbol).strip(), interval, RANGE_DAYS[range])
+    if error:
+        raise HTTPException(502, error)
+    points = [{"t": ts.strftime("%Y-%m-%dT%H:%M:%SZ"), "close": float(c)} for ts, c in zip(frame["ts"], frame["close"])]
+    return jsonable({"range": range, "interval": interval, "currency": currency, "points": points})
 
 
 # ---------------------------------------------------------------- transactions (buys and sells; stored in `lots`)

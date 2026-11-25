@@ -239,6 +239,24 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/disclaimer/accept", json={"version": "2026-11-24"}).status_code, 403)
         self.assertEqual(TestClient(self.client.app).get("/api/disclaimer").status_code, 401)
 
+    def test_intraday_chart_endpoint(self):
+        self.setup_account()
+        for iid, symbol in (("AAPL", "AAPL"), ("FUND", "fund:HU0000702709")):
+            body = {"instrument_id": iid, "name": iid, "asset_type": "stock", "quantity": 0, "currency": "USD", "market_symbol": symbol}
+            self.client.post("/api/instruments", json=body, headers=H).raise_for_status()
+        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-11-24 14:30", "2026-11-24 14:45"], utc=True), "close": [100.0, 101.5]})
+        with mock.patch("server.main.download_intraday", return_value=(bars, "USD", None)) as fetch:
+            r = self.client.get("/api/instruments/AAPL/chart?range=1W&interval=15m")
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["points"], [{"t": "2026-11-24T14:30:00Z", "close": 100.0}, {"t": "2026-11-24T14:45:00Z", "close": 101.5}])
+        self.assertEqual(fetch.call_args.args, ("AAPL", "15m", 8))
+        self.assertEqual(self.client.get("/api/instruments/AAPL/chart?range=1Y&interval=5m").status_code, 400)  # Yahoo: 60 days
+        self.assertEqual(self.client.get("/api/instruments/FUND/chart?range=1W&interval=15m").status_code, 400)  # daily NAVs only
+        self.assertEqual(self.client.get("/api/instruments/NOPE/chart?range=1W&interval=15m").status_code, 404)
+        with mock.patch("server.main.download_intraday", return_value=(bars.iloc[0:0], None, "Download failed: rate limited")):
+            r = self.client.get("/api/instruments/AAPL/chart?range=1W&interval=15m")
+        self.assertEqual((r.status_code, r.json()["detail"]), (502, "Download failed: rate limited"))
+
     def test_purchase_platform_lookup_and_quote(self):
         self.setup_account()
         body = {"instrument_id": "VWCE", "name": "Vanguard FTSE All-World", "asset_type": "etf", "quantity": 0,

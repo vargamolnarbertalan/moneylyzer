@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { endpoints, type InstrumentDetail, type Row } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { endpoints, errorMessage, type InstrumentDetail, type IntradayChart, type Row } from "../api";
 import { Alert } from "../components/Alert";
 import { AreaChart } from "../components/AreaChart";
 import { Tween } from "../components/Tween";
@@ -21,12 +21,58 @@ import { Link } from "../router";
 const RANGES = [
   { value: "1W", label: "1W", name: "1 week" },
   { value: "1M", label: "1M", name: "1 month" },
+  { value: "3M", label: "3M", name: "3 months" },
   { value: "6M", label: "6M", name: "6 months" },
   { value: "1Y", label: "1Y", name: "1 year" },
   { value: "ALL", label: "All", name: "All time" },
 ] as const;
 type RangeValue = (typeof RANGES)[number]["value"];
-const RANGE_DAYS: Record<RangeValue, number | null> = { "1W": 8, "1M": 31, "6M": 183, "1Y": 366, ALL: null };
+const RANGE_DAYS: Record<RangeValue, number | null> = { "1W": 8, "1M": 31, "3M": 92, "6M": 183, "1Y": 366, ALL: null };
+
+type Interval = "1m" | "5m" | "15m" | "30m" | "1h" | "4h" | "1d";
+const INTERVALS: Record<Interval, { label: string; name: string; adjective: string }> = {
+  "1m": { label: "1m", name: "1 minute", adjective: "1-minute" },
+  "5m": { label: "5m", name: "5 minutes", adjective: "5-minute" },
+  "15m": { label: "15m", name: "15 minutes", adjective: "15-minute" },
+  "30m": { label: "30m", name: "30 minutes", adjective: "30-minute" },
+  "1h": { label: "1h", name: "1 hour", adjective: "hourly" },
+  "4h": { label: "4h", name: "4 hours", adjective: "4-hour" },
+  "1d": { label: "1D", name: "1 day", adjective: "daily" },
+};
+// What Yahoo serves for each span (the server checks the same); daily always, from the stored prices.
+const RANGE_INTERVALS: Record<RangeValue, Interval[]> = {
+  "1W": ["1m", "5m", "15m", "30m", "1h", "1d"],
+  "1M": ["5m", "15m", "30m", "1h", "4h", "1d"],
+  "3M": ["1h", "4h", "1d"],
+  "6M": ["1h", "4h", "1d"],
+  "1Y": ["1h", "4h", "1d"],
+  ALL: ["1d"],
+};
+const DEFAULT_INTERVAL: Record<RangeValue, Interval> = { "1W": "15m", "1M": "1h", "3M": "4h", "6M": "1d", "1Y": "1d", ALL: "1d" };
+const INTRADAY_REFRESH_MS = 60_000;
+
+interface Fetched {
+  key: string;
+  data?: IntradayChart;
+  error?: string;
+  /** When the bars on screen were fetched (ISO). */
+  at?: string;
+  /** The last refresh failed: the bars shown are from `at`. */
+  refreshError?: string;
+}
+
+/** A refresh's bars, keeping the older ones the window has since moved past: the chart's first point stays
+ *  put, so a refresh only adds at the end and never clears a hover or a picked comparison. */
+function keepStart(before: IntradayChart | undefined, next: IntradayChart): IntradayChart {
+  const first = next.points[0]?.t;
+  if (!before || !first || before.currency !== next.currency) return next;
+  return { ...next, points: [...before.points.filter((p) => p.t < first), ...next.points] };
+}
+
+/** Yahoo tickers never contain ":"; funds ("fund:ISIN") and holdings without a symbol have daily prices only. */
+function isYahooSymbol(symbol: string | null | undefined): boolean {
+  return !!symbol && !!symbol.trim() && !symbol.includes(":");
+}
 
 export function HoldingPage({ id }: { id: string }) {
   const live = useLive();
@@ -207,43 +253,134 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
 
 function PriceChart({ detail, row, priceCcy }: { detail: InstrumentDetail; row: Row | null; priceCcy: string }) {
   const [range, setRange] = usePref<RangeValue>("holding_range", RANGES.map((r) => r.value), "1Y");
+  const id = detail.instrument.instrument_id;
+  const yahoo = isYahooSymbol(detail.instrument.market_symbol);
+  // The interval picked for this range; another range starts from its own default again.
+  const [picked, setPicked] = useState<{ range: RangeValue; interval: Interval } | null>(null);
+  const offered: Interval[] = yahoo ? RANGE_INTERVALS[range] : ["1d"];
+  const interval: Interval = picked?.range === range && offered.includes(picked.interval) ? picked.interval : yahoo ? DEFAULT_INTERVAL[range] : "1d";
+  const intraday = interval !== "1d";
+
   const all = useMemo(() => [...detail.prices].sort((a, b) => a.date.localeCompare(b.date)), [detail.prices]);
-  const points = useMemo(() => {
+  const daily = useMemo(() => {
     const days = RANGE_DAYS[range];
     if (days === null) return all;
     const from = daysAgoISO(days);
     return all.filter((p) => p.date >= from);
   }, [all, range]);
 
-  const sameCcy = (priceCcy ?? "").toUpperCase() === detail.instrument.currency.toUpperCase();
-  const avg = row?.avg_cost;
-  const ref = sameCcy && isNum(avg) ? avg : null;
-  const ccy = ccyLabel(priceCcy);
+  // Intraday bars come from Yahoo when asked, and again every minute while the page is in view.
+  const chartKey = `${id}|${range}|${interval}`;
+  const [fetched, setFetched] = useState<Fetched | null>(null);
+  useEffect(() => {
+    if (!intraday) return;
+    let alive = true;
+    const load = () =>
+      endpoints.instrumentChart(id, range, interval).then(
+        (data) => alive && setFetched((cur) => ({ key: chartKey, data: keepStart(cur?.key === chartKey ? cur.data : undefined, data), at: new Date().toISOString() })),
+        // a failed refresh keeps the bars on screen and says they are stale; a failed first load says why
+        (err) =>
+          alive &&
+          setFetched((cur) => (cur?.key === chartKey && cur.data ? { ...cur, refreshError: errorMessage(err) } : { key: chartKey, error: errorMessage(err) })),
+      );
+    void load();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, INTRADAY_REFRESH_MS);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [chartKey, intraday]);
+  const current = intraday && fetched?.key === chartKey ? fetched : null;
+  const bars = useMemo(() => current?.data?.points ?? [], [current?.data]);
+  const stale = !!current?.refreshError;
+
+  const shownCcy = intraday ? (current?.data?.currency ?? priceCcy) : priceCcy;
+  // The average cost is in the holding's currency (GBP); a London chart is in pence (GBp): scale it by the
+  // holding's price divisor rather than drawing pounds on a pence axis (100x off) or leaving it out.
+  const holdingCcy = detail.instrument.currency;
+  const divisor = detail.instrument.price_divisor || 1;
+  const minorUnit = !!shownCcy && shownCcy !== holdingCcy && shownCcy.toUpperCase() === holdingCcy.toUpperCase() && divisor > 1;
+  const sameCcy = shownCcy === holdingCcy || minorUnit;
+  const avg = isNum(row?.avg_cost) ? row.avg_cost * (minorUnit ? divisor : 1) : null;
+  const ccy = ccyLabel(shownCcy);
+  const values = useMemo(() => (intraday ? bars.map((p) => p.close) : daily.map((p) => p.close)), [intraday, bars, daily]);
+  // memoised: thousands of bars, and the page re-renders on every live tick
+  const labels = useMemo(() => (intraday ? bars.map((p) => asOfLabel(p.t)) : daily.map((p) => p.date)), [intraday, bars, daily]);
+  // The average-cost line only when it sits near the prices: far below a week of 15-minute moves it would
+  // squeeze them into a flat line (the chart's scale always includes it). The note still gives the figure.
+  const lo = values.length ? Math.min(...values) : 0;
+  const hi = values.length ? Math.max(...values) : 0;
+  const avgShown = sameCcy && isNum(avg) ? avg : null;
+  const ref = avgShown !== null && avgShown >= lo - (hi - lo) / 2 && avgShown <= hi + (hi - lo) / 2 ? avgShown : null;
+  const what = INTERVALS[interval].adjective;
+
+  // One live region that stays mounted, so loading, failure and arrival are each announced.
+  const status = !intraday
+    ? ""
+    : !current
+      ? `Loading ${what} prices from Yahoo…`
+      : current.error
+        ? current.error
+        : stale
+          ? "Could not refresh the prices from Yahoo."
+          : `${bars.length} ${what} prices shown.`;
+
+  let empty: string | null = null;
+  if (intraday && !current) empty = `Loading ${what} prices from Yahoo…`;
+  else if (intraday && current?.error) empty = `${current.error} Pick 1D for the stored daily prices.`;
+  else if (values.length < 2)
+    empty = intraday
+      ? `Yahoo has no ${what} prices for this range.`
+      : all.length === 0
+        ? "No stored prices yet — they fill in automatically within a minute of adding a holding with a market symbol."
+        : "No stored prices in this range.";
 
   return (
     <Card as="section" className="span2" aria-labelledby="price-h">
-      <CardHeader id="price-h" title="Price per unit" aside={<Segmented label="Chart range" options={RANGES} value={range} onChange={setRange} />} />
-      {points.length < 2 ? (
-        <div className="chart-empty">
-          {all.length === 0
-            ? "No stored prices yet — they fill in automatically within a minute of adding a holding with a market symbol."
-            : "No stored prices in this range."}
-        </div>
+      <CardHeader
+        id="price-h"
+        title="Price per unit"
+        aside={
+          <div className="chart-controls">
+            {offered.length > 1 && (
+              <Segmented
+                label="Price interval"
+                options={offered.map((v) => ({ value: v, label: INTERVALS[v].label, name: INTERVALS[v].name }))}
+                value={interval}
+                onChange={(v) => setPicked({ range, interval: v })}
+              />
+            )}
+            <Segmented label="Chart range" options={RANGES} value={range} onChange={setRange} />
+          </div>
+        }
+      />
+      <p className="sr-only" role="status">
+        {status}
+      </p>
+      {empty ? (
+        <div className="chart-empty">{empty}</div>
       ) : (
         <AreaChart
-          values={points.map((p) => p.close)}
-          labels={points.map((p) => p.date)}
+          values={values}
+          labels={labels}
           fmt={(v) => `${price(v)}${ccy ? ` ${ccy}` : ""}`}
-          fmtDelta={(v, from) => signedPrice(v, priceCcy, from)}
-          resetKey={`${range}|${priceCcy}`}
+          fmtDelta={(v, from) => signedPrice(v, shownCcy, from)}
+          resetKey={`${range}|${interval}|${shownCcy}`}
           refValue={ref}
-          live
-          label={`Price per unit, ${range}`}
+          live={!stale}
+          label={`Price per unit, ${range}, ${INTERVALS[interval].name} steps`}
         />
       )}
       <p className="note">
-        {all.length} stored daily prices.
-        {ref !== null && ` Dashed line: your average cost (${priceWithCcy(ref, detail.instrument.currency, true)}).`}
+        {stale && current?.at && `Could not refresh from Yahoo: these are the prices from ${asOfLabel(current.at)}. `}
+        {intraday
+          ? bars.length > 0 &&
+            `${bars.length} ${what} prices from Yahoo, in your local time; hours without trading are left out. As traded, not adjusted for dividends, so a long range can differ from 1D. Fetched when you look, not stored.`
+          : `${all.length} stored daily prices.${yahoo ? "" : " This holding has daily prices only."}`}
+        {ref !== null && ` Dashed line: your average cost (${priceWithCcy(ref, shownCcy, true)}).`}
+        {ref === null && avgShown !== null && values.length > 1 && ` Your average cost (${priceWithCcy(avgShown, shownCcy, true)}) is ${avgShown < lo ? "below" : "above"} this range, so it isn't drawn.`}
       </p>
     </Card>
   );
