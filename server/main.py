@@ -29,7 +29,7 @@ from analyzer.market import CURRENCY_RE, download_fund_nav, download_intraday, f
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
 from server import __version__, auth, claude_login
-from server.live import clean, hub
+from server.live import LIVE_CHOICES, clean, hub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("lia")
@@ -334,9 +334,28 @@ class AppSettingsBody(BaseModel):
     base_currency: str = Field(min_length=3, max_length=3)
 
 
+def _app_settings() -> dict:
+    return {"base_currency": db.base_currency(), "currencies": COMMON_CURRENCIES,
+            "live_seconds": hub.seconds(), "live_choices": list(LIVE_CHOICES)}
+
+
 @app.get("/api/settings")
 def app_settings(user: str = Depends(auth.require_user)):
-    return {"base_currency": db.base_currency(), "currencies": COMMON_CURRENCIES}
+    return _app_settings()
+
+
+class LiveSettingsBody(BaseModel):
+    seconds: int
+
+
+@app.put("/api/settings/live")
+async def live_settings_save(body: LiveSettingsBody, user: str = Depends(auth.require_user)):
+    """How often live prices refresh while a browser is open; applies at once (async: it wakes the live loop)."""
+    try:
+        hub.set_seconds(body.seconds)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    return _app_settings()
 
 
 @app.put("/api/settings")
@@ -350,7 +369,7 @@ async def app_settings_save(body: AppSettingsBody, user: str = Depends(auth.requ
             raise HTTPException(400, f"No exchange rate available for {code} (Yahoo symbol {fx_symbol(code)}).")
     db.set_setting("base_currency", code)
     await hub.refresh(force=True)
-    return {"base_currency": code, "currencies": COMMON_CURRENCIES}
+    return _app_settings()
 
 
 # ---------------------------------------------------------------- view preferences (synced across devices)
@@ -863,7 +882,14 @@ def ai_settings_save(body: SettingsBody, user: str = Depends(auth.require_user))
 
 @app.post("/api/advisor/ask")
 async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
-    snapshot = hub.snapshot or await hub.refresh()
+    snapshot = hub.snapshot
+    if snapshot is None or hub.quotes_age() > 2 * hub.seconds():  # after a pause with nobody watching: refresh first
+        try:
+            snapshot = await hub.refresh(manual=True) or snapshot
+        except Exception:
+            if snapshot is None:
+                raise
+            log.warning("could not refresh prices before an AI question; using the last snapshot")
     if body.instrument_id and not any(r["id"] == body.instrument_id for r in snapshot.get("rows", [])):
         raise HTTPException(404, "No such holding.")
     try:

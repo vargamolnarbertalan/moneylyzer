@@ -239,6 +239,15 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/disclaimer/accept", json={"version": "2026-11-24"}).status_code, 403)
         self.assertEqual(TestClient(self.client.app).get("/api/disclaimer").status_code, 401)
 
+    def test_live_refresh_setting(self):
+        self.setup_account()
+        got = self.client.get("/api/settings").json()
+        self.assertEqual((got["live_seconds"], got["live_choices"]), (60, [15, 30, 60, 120, 300, 900]))
+        r = self.client.put("/api/settings/live", json={"seconds": 300}, headers=H)
+        self.assertEqual((r.status_code, r.json()["live_seconds"]), (200, 300))
+        self.assertEqual(self.client.get("/api/settings").json()["live_seconds"], 300)
+        self.assertEqual(self.client.put("/api/settings/live", json={"seconds": 5}, headers=H).status_code, 400)
+
     def test_intraday_chart_endpoint(self):
         self.setup_account()
         for iid, symbol in (("AAPL", "AAPL"), ("FUND", "fund:HU0000702709")):

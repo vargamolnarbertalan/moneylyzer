@@ -244,6 +244,9 @@ export interface ClaudeDownload {
 export interface AppSettings {
   base_currency: string;
   currencies: string[];
+  /** How often live prices refresh while a browser is open. */
+  live_seconds: number;
+  live_choices: number[];
 }
 
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
@@ -541,6 +544,7 @@ export const endpoints = {
 
   settings: () => api.get<AppSettings>("/api/settings"),
   saveSettings: (baseCurrency: string) => api.put<AppSettings>("/api/settings", { base_currency: baseCurrency }),
+  saveLiveSeconds: (seconds: number) => api.put<AppSettings>("/api/settings/live", { seconds }),
 
   claudeStatus: () => api.get<ClaudeStatus>("/api/claude/status"),
   /** A sign-in URL, or `installing` while Claude Code downloads in the background (poll claudeStatus). */

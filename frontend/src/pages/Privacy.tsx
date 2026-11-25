@@ -26,7 +26,7 @@ interface Flow {
 const FLOWS: readonly Flow[] = [
   {
     name: "Yahoo Finance — prices",
-    sends: "the ticker symbols of your holdings, every 60 seconds (daily history once a day); a holding's ticker each minute while its chart shows a minute or hour interval.",
+    sends: "the ticker symbols of your holdings: for live quotes every minute by default (Settings → Display) while Moneylyzer is open in a browser, and once when the server starts; for daily history once a day; a holding's ticker each minute while its chart shows a minute or hour interval.",
     gets: "live quotes, daily closing prices, and minute or hour prices for that chart (not stored).",
     linkable: "ip",
     linkNote: "No name or account; Yahoo sees the server's IP address with the tickers.",
@@ -34,7 +34,7 @@ const FLOWS: readonly Flow[] = [
   },
   {
     name: "Yahoo Finance — exchange rates",
-    sends: "currency pairs such as USDEUR=X for the currencies you hold and report in, every 60 seconds.",
+    sends: "currency pairs such as USDEUR=X for the currencies you hold and report in, with the prices above.",
     gets: "exchange rates.",
     linkable: "ip",
     linkNote: "No name or account; the server's IP address.",

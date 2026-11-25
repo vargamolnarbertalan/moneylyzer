@@ -1,6 +1,7 @@
 """The single place that talks to market data sources, on a fixed cadence, for all browser tabs.
 
-Every LIVE_SECONDS: live Yahoo quotes + FX -> portfolio snapshot -> pushed to SSE subscribers.
+Every live interval (Settings), while a browser is watching: live Yahoo quotes + FX -> portfolio snapshot ->
+pushed to SSE subscribers.
 Daily: Yahoo daily price history per instrument and FX history per currency.
 Hourly: Hungarian fund prices (OTP Alapkezelő / BAMOSZ).
 Sources that fail are retried after a back-off, never on every tick.
@@ -26,7 +27,23 @@ from analyzer.market import (
 from analyzer.portfolio import build_snapshot, is_yahoo_symbol
 
 log = logging.getLogger("lia.live")
-LIVE_SECONDS = int(os.environ.get("LIA_LIVE_SECONDS", "60"))
+# How often live prices refresh: chosen in Settings (stored as "live_seconds"); LIA_LIVE_SECONDS is only the
+# default until a choice is saved. Never under 15 s: Yahoo throttles clients that ask more often.
+LIVE_CHOICES = (15, 30, 60, 120, 300, 900)
+
+
+def _default_seconds() -> int:
+    """LIA_LIVE_SECONDS, rounded to the nearest choice so Settings always shows the interval in use."""
+    try:
+        wanted = int(os.environ.get("LIA_LIVE_SECONDS", "60"))
+    except ValueError:
+        wanted = 60
+    return min(LIVE_CHOICES, key=lambda c: abs(c - wanted))
+
+
+DEFAULT_LIVE_SECONDS = _default_seconds()
+BACKGROUND_SECONDS = 3600  # with nobody watching: daily history, fund NAVs, benchmarks and news, hourly as before
+LOOP_ERROR_PAUSE = 15
 FUND_SECONDS = 3600
 FAIL_BACKOFF_SECONDS = 600
 MANUAL_MIN_GAP_SECONDS = 30
@@ -50,17 +67,38 @@ class LiveHub:
         self.snapshot: dict | None = None
         self._subscribers: set[asyncio.Queue] = set()
         self._lock = asyncio.Lock()
-        self._last_run = 0.0
+        # monotonic clocks: when quotes / the history jobs last ran, and the earliest retry after a failed cycle
+        self._last_quotes = float("-inf")
+        self._last_background = float("-inf")
+        self._retry_at = float("-inf")
+        self._quotes_at: datetime | None = None  # wall time of the last live quotes, for the snapshot's stamp
         self._daily_done: dict[str, str] = {}     # key -> ISO day of last success
         self._next_try: dict[str, float] = {}     # key -> earliest retry time after a failure
         self._fund_done: dict[str, float] = {}
         self._errors: dict[str, str] = {}         # symbol / "FX EUR" / "FX history EUR" -> message, cleared on success
         self._quotes: dict[str, dict] = {}        # last live quotes, reused by recompute()
+        self._wake = asyncio.Event()              # a viewer arrived or the interval changed: re-plan the loop
+
+    # ---- interval ------------------------------------------------------
+    def seconds(self) -> int:
+        """Never raises: the loop calls it every pass, and a locked database must not end live prices."""
+        try:
+            value = int(db.get_setting("live_seconds") or 0)
+        except Exception:
+            return DEFAULT_LIVE_SECONDS
+        return value if value in LIVE_CHOICES else DEFAULT_LIVE_SECONDS
+
+    def set_seconds(self, seconds: int) -> None:
+        if seconds not in LIVE_CHOICES:
+            raise ValueError(f"Choose one of {', '.join(map(str, LIVE_CHOICES))} seconds.")
+        db.set_setting("live_seconds", str(seconds))
+        self._wake.set()  # takes effect now, no restart
 
     # ---- subscriptions -------------------------------------------------
     def subscribe(self) -> asyncio.Queue:
         q: asyncio.Queue = asyncio.Queue(maxsize=1)
         self._subscribers.add(q)
+        self._wake.set()  # back from a pause: refresh now if the data is older than the interval
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
@@ -77,20 +115,48 @@ class LiveHub:
 
     # ---- refresh loop --------------------------------------------------
     async def run_forever(self) -> None:
+        """Live quotes every `seconds()` while a browser has the live stream open. With nobody watching, no
+        live quotes: only the hourly background pass (daily history, fund NAVs, benchmarks, news), so the stored
+        series get no gaps. A viewer arriving wakes the loop. Clocks are monotonic: a wall-clock change
+        (time sync, resume) cannot stall it."""
         while True:
             try:
-                await self.refresh()
-            except Exception:  # never let one bad cycle stop the loop
-                log.exception("live refresh failed")
-            await asyncio.sleep(LIVE_SECONDS)
+                self._wake.clear()  # before deciding: a wake that comes after this is never lost
+                watched = bool(self._subscribers) or self.snapshot is None  # the startup snapshot is built regardless
+                due = (self._last_quotes + self.seconds()) if watched else (self._last_background + BACKGROUND_SECONDS)
+                wait = max(due, self._retry_at) - time.monotonic()
+                if wait <= 0:
+                    try:
+                        await self.refresh(quotes=watched)
+                    except Exception:  # never let one bad cycle stop the loop
+                        log.exception("live refresh failed")
+                        # retry after one interval; a separate clock, so the manual Refresh is not throttled by it
+                        self._retry_at = time.monotonic() + (self.seconds() if watched else FAIL_BACKOFF_SECONDS)
+                    continue
+                try:
+                    await asyncio.wait_for(self._wake.wait(), wait)
+                except asyncio.TimeoutError:
+                    pass
+            except Exception:  # deciding failed (a locked database...): the loop must outlive it
+                log.exception("live loop error")
+                await asyncio.sleep(LOOP_ERROR_PAUSE)
 
-    async def refresh(self, manual: bool = False, force: bool = False) -> dict | None:
-        """force: a setting changed (e.g. reporting currency), so fetch now regardless of the throttle."""
-        if manual and not force and time.time() - self._last_run < MANUAL_MIN_GAP_SECONDS:
+    def quotes_age(self) -> float:
+        """Seconds since live quotes were last fetched (infinite before the first)."""
+        return time.monotonic() - self._last_quotes
+
+    async def refresh(self, manual: bool = False, force: bool = False, quotes: bool = True) -> dict | None:
+        """force: a setting changed (e.g. reporting currency), so fetch now regardless of the throttle.
+        quotes=False: the background pass, history jobs only (nobody is watching live prices)."""
+        if manual and not force and self.quotes_age() < MANUAL_MIN_GAP_SECONDS:
             return self.snapshot  # throttled: data is at most 30 s old anyway
         async with self._lock:
-            snap = clean(await asyncio.to_thread(self._compute))
-            self._last_run = time.time()
+            snap = clean(await asyncio.to_thread(self._compute, True, quotes))
+            now = time.monotonic()
+            self._last_background = now
+            if quotes:
+                self._last_quotes = now
+            self._retry_at = float("-inf")
             self.snapshot = snap
             self._publish(snap)
             return snap
@@ -104,7 +170,7 @@ class LiveHub:
             return snap
 
     # ---- work (runs in a worker thread) --------------------------------
-    def _compute(self, fetch: bool = True) -> dict:
+    def _compute(self, fetch: bool = True, quotes_too: bool = True) -> dict:
         instruments = db.get_instruments()
         items = instruments.to_dict("records")
         base = db.base_currency()
@@ -114,9 +180,12 @@ class LiveHub:
         pivots = sorted(involved - {"USD"})  # every pair is derived through USD
         if fetch:
             self._update_histories(items, pivots)
+        live_fetch = fetch and quotes_too
+        if live_fetch:
             wanted = symbols + [fx_symbol(c) for c in pivots]
             with ThreadPoolExecutor(max_workers=8) as pool:
                 self._quotes = dict(zip(wanted, pool.map(live_quote, wanted)))
+            self._quotes_at = datetime.now(timezone.utc)
         quotes = self._quotes
         per_usd: dict[str, float] = {"USD": 1.0}
         for c in pivots:
@@ -124,13 +193,15 @@ class LiveHub:
             if q.get("price") and q.get("currency") == c:
                 per_usd[c] = q["price"]
                 self._errors.pop(f"FX {c}", None)
-            elif fetch or c not in per_usd:
+            elif live_fetch or c not in per_usd:
                 self._errors[f"FX {c}"] = f"USD/{c} live rate unavailable: {q.get('error') or 'not fetched yet'}"
         fx_now = ({c: per_usd[base] / per_usd[c] for c in involved - {base} if c in per_usd}
                   if base in per_usd else {})
         snap = build_snapshot({s: quotes[s] for s in symbols if s in quotes}, fx_now, base, dict(self._errors))
-        snap["updated_at"] = datetime.now(timezone.utc).isoformat()
-        snap["refresh_seconds"] = LIVE_SECONDS
+        # a background pass fetched no quotes: the snapshot is as old as its quotes, and must not look live
+        stamp = (self._quotes_at or datetime.now(timezone.utc)) if fetch and not quotes_too else datetime.now(timezone.utc)
+        snap["updated_at"] = stamp.isoformat()
+        snap["refresh_seconds"] = self.seconds()
         snap["errors"] = [msg for key, msg in sorted(self._errors.items()) if key.startswith("FX ")]
         return snap
 
