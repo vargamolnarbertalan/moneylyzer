@@ -214,6 +214,8 @@ export interface ClaudeStatus {
   /** False until the first Connect has downloaded Claude Code onto the server. */
   installed?: boolean;
   install_note?: string;
+  /** The background download of Claude Code (only while it is not installed). */
+  download?: ClaudeDownload;
   /** Why Connect cannot work on this server (only when available is false). */
   reason?: string;
   loggedIn: boolean;
@@ -221,6 +223,13 @@ export interface ClaudeStatus {
   subscription?: Nullable<string>;
   email?: Nullable<string>;
   error?: string;
+}
+
+export interface ClaudeDownload {
+  downloading: boolean;
+  done: number;
+  total: Nullable<number>;
+  error: Nullable<string>;
 }
 
 export interface AppSettings {
@@ -490,7 +499,8 @@ export const endpoints = {
   saveSettings: (baseCurrency: string) => api.put<AppSettings>("/api/settings", { base_currency: baseCurrency }),
 
   claudeStatus: () => api.get<ClaudeStatus>("/api/claude/status"),
-  claudeLogin: () => api.post<{ url: string }>("/api/claude/login"),
+  /** A sign-in URL, or `installing` while Claude Code downloads in the background (poll claudeStatus). */
+  claudeLogin: () => api.post<{ url?: string; installing?: boolean }>("/api/claude/login"),
   claudeCode: (code: string) => api.post<ClaudeStatus>("/api/claude/code", { code }),
   claudeLogout: () => api.post<ClaudeStatus>("/api/claude/logout"),
 

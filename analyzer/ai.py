@@ -53,8 +53,8 @@ def find_claude_cli() -> str | None:
     default = Path.home() / ".local" / "bin" / ("claude.exe" if os.name == "nt" else "claude")
     if default.exists():
         return str(default)
-    from analyzer.claude_install import installed_path  # downloaded on first use into the data volume
-    return installed_path()
+    from analyzer.claude_install import usable_path  # downloaded on first use into the data volume
+    return usable_path()
 
 
 def build_command(cli: str, model: str) -> list[str]:

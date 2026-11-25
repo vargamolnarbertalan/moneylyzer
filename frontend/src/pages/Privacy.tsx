@@ -81,11 +81,11 @@ const FLOWS: readonly Flow[] = [
     sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase and sale history, where you hold what and your holding notes (free text).",
   },
   {
-    name: "npm (once)",
-    sends: "a download request for the pinned Claude Code version, the first time you connect Claude.",
+    name: "npm",
+    sends: "a download request for the pinned Claude Code version: when you connect Claude, and after an app update that pins a different Claude Code, when you use Claude (signed in, or asking the Claude model). A failed download is retried an hour later, then less often, at most daily.",
     gets: "the Claude Code program, checked against npm's integrity hash.",
     linkable: "ip",
-    linkNote: "The server's IP address, once.",
+    linkNote: "The server's IP address, about once per Claude Code version (more often if downloads fail).",
     sensitive: null,
   },
 ];

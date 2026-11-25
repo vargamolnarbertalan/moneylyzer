@@ -253,8 +253,12 @@ class ClaudeCodeTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.work = mock.patch("analyzer.llm.WORK_DIR", Path(self.tmp.name) / "claude-cwd")
         self.work.start()
+        # A real update check would look at the real data/bin and could download from npm.
+        self.update = mock.patch("analyzer.claude_install.update_if_needed")
+        self.update.start()
 
     def tearDown(self):
+        self.update.stop()
         self.work.stop()
         self.tmp.cleanup()
 
