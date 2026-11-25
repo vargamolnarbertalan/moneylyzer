@@ -2,6 +2,7 @@ import { useId, useState, type FormEvent } from "react";
 import { QUICK_PROMPTS, queueQuestion } from "../advisor";
 import { ShieldCheck, Sparkles } from "lucide-react";
 import { Link, navigate } from "../router";
+import { AiMark } from "./AiMark";
 import { Card } from "./Card";
 
 const CHIPS = QUICK_PROMPTS.slice(0, 3);
@@ -26,7 +27,7 @@ export function AdvisorCard({ className }: { className?: string }) {
     <Card as="section" className={`ai ${className ?? ""}`.trim()} aria-labelledby={`${uid}h`}>
       <div className="card-h">
         <div className="who">
-          <i aria-hidden="true" />
+          <AiMark />
           <h2 id={`${uid}h`}>AI analyst</h2>
         </div>
         <span className="tag">online · on send</span>

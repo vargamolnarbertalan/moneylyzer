@@ -3,6 +3,7 @@ import { endpoints, type InstrumentDetail, type Row } from "../api";
 import { Alert } from "../components/Alert";
 import { AreaChart } from "../components/AreaChart";
 import { Tween } from "../components/Tween";
+import { AiMark } from "../components/AiMark";
 import { Card, CardHeader } from "../components/Card";
 import { ArrowLeft } from "lucide-react";
 import { MetricsCard, ScenariosCard } from "../components/Metrics";
@@ -117,7 +118,7 @@ export function HoldingPage({ id }: { id: string }) {
         <Card as="section" className="ai" aria-labelledby="ask-h">
           <div className="card-h">
             <div className="who">
-              <i aria-hidden="true" />
+              <AiMark />
               <h2 id="ask-h">AI analyst</h2>
             </div>
             <span className="tag">online · on send</span>

@@ -1847,11 +1847,9 @@ input:-webkit-autofill {
   align-items: center;
   gap: 8px;
 }
-.ai .who i {
+.ai .who .ai-mark {
   width: 22px;
   height: 22px;
-  border-radius: 7px;
-  background: var(--grad);
   flex: none;
 }
 .ai .ai-actions {
