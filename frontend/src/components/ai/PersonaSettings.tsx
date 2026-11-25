@@ -1,5 +1,5 @@
 import { ChevronDown } from "lucide-react";
-import { useEffect, useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { endpoints, errorMessage, type Horizon, type Preferences, type Risk } from "../../api";
 import { useResource } from "../../hooks";
 import { Alert } from "../Alert";
@@ -44,6 +44,13 @@ export function PersonaSettings() {
   const [prefMsg, setPrefMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmShort, setConfirmShort] = useState(false);
   const [confirmRec, setConfirmRec] = useState(false);
+  // Turn on / Cancel unmount the focused button: give focus back to the switch (only after the user used it).
+  const recSwitch = useRef<HTMLInputElement | null>(null);
+  const recUsed = useRef(false);
+  useEffect(() => {
+    const a = document.activeElement;
+    if (recUsed.current && !confirmRec && !prefBusy && (!a || a === document.body)) recSwitch.current?.focus();
+  }, [confirmRec, prefBusy]);
   const [understood, setUnderstood] = useState(false);
 
   useEffect(() => {
@@ -89,7 +96,10 @@ export function PersonaSettings() {
     setPrefMsg(null);
     try {
       const saved = await endpoints.saveAiSettings({ preferences: next });
-      setPrefs(saved.preferences);
+      // The switches save one key; keep the user's unsaved edits in the rest of the form.
+      const keys = Object.keys(next) as (keyof Preferences)[];
+      const one = keys.length === 1 && (keys[0] === "allow_recommendations" || keys[0] === "allow_short_term") ? keys[0] : null;
+      setPrefs((cur) => (one && cur ? { ...cur, [one]: saved.preferences[one] } : saved.preferences));
       setPrefMsg({ ok: true, text: okText });
       return true;
     } catch (err) {
@@ -114,6 +124,7 @@ export function PersonaSettings() {
 
   // Direct recommendations: switching on needs one confirming click; switching off is immediate.
   const onRecommend = (checked: boolean) => {
+    recUsed.current = true;
     if (checked) {
       setConfirmRec(true);
     } else {
@@ -239,10 +250,10 @@ export function PersonaSettings() {
 
         <div className="field">
           <label className="check switch">
-            <input type="checkbox" checked={prefs.allow_recommendations || confirmRec} onChange={(e) => onRecommend(e.target.checked)} disabled={prefBusy} aria-describedby={confirmRec ? id("rec") : id("rech")} />
+            <input ref={recSwitch} type="checkbox" checked={prefs.allow_recommendations || confirmRec} onChange={(e) => onRecommend(e.target.checked)} disabled={prefBusy} aria-describedby={confirmRec ? id("rec") : id("rech")} />
             <span>Give me direct buy, sell and hold recommendations</span>
           </label>
-          <span id={id("rech")} className="help">Off by default: the AI analyst sets out options and scenarios. On: it may recommend an action for a named holding, always with the likelihood, its confidence and the risks.</span>
+          <span id={id("rech")} className="help">Off by default: the AI analyst sets out options and scenarios. On: it may recommend an action for a holding or another instrument, always with the likelihood, its confidence and the risks.</span>
         </div>
         {confirmRec && !prefs.allow_recommendations && (
           <div id={id("rec")} className="warn-panel" role="group" aria-label="Confirm direct recommendations">

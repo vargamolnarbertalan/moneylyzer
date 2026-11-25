@@ -76,7 +76,7 @@ same way.
 
 A new holding is not a card: the answer points to Holdings → Add holding.
 
-**Never proposable:** sharing level, AI models and keys, web research, short-term trading, persona, password and account,
+**Never proposable:** sharing level, AI models and keys, web research, short-term trading, direct recommendations, persona, password and account,
 disclaimer, backups and imports, view preferences, price feed. No schema exists for them.
 
 **Prompt injection:** cards can appear in any answer, so the defences are the allow-list, a click on a visible
