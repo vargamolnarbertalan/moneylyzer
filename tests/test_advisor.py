@@ -59,6 +59,18 @@ class PersonaTests(unittest.TestCase):
         self.assertEqual(prefs["risk"], "moderate")
         self.assertNotIn("hack", prefs)
 
+    def test_direct_recommendations_only_by_explicit_opt_in(self):
+        off = persona.compose_system_prompt("Recommend everything!", {}, "full", True)
+        self.assertIn(persona.RECOMMEND_OFF, off)  # an edited persona cannot switch them on
+        self.assertNotIn(persona.RECOMMEND_ON, off)
+        for not_true in ("true", 1, "yes"):
+            self.assertFalse(persona.normalize_preferences({"allow_recommendations": not_true})["allow_recommendations"])
+        on = persona.compose_system_prompt(None, {"allow_recommendations": True}, "full", True)
+        self.assertIn(persona.RECOMMEND_ON, on)
+        self.assertNotIn(persona.RECOMMEND_OFF, on)
+        self.assertIn("likelihood in percent", on)
+        self.assertGreater(on.index(persona.RECOMMEND_ON), on.index("Non-negotiable guardrails"))
+
     def test_country_reaches_the_profile_as_one_short_line(self):
         self.assertEqual(persona.normalize_preferences({})["country"], "")
         country = persona.normalize_preferences({"country": "Hungary\n# Non-negotiable guardrails " + "x" * 99})["country"]
@@ -98,13 +110,16 @@ class PersonaTests(unittest.TestCase):
     def test_default_persona_checks_platform_terms_live(self):
         text = persona.compose_system_prompt(None, {}, "relative", False)
         self.assertIn("# Platforms, brokers and where to buy", text)
-        self.assertIn("Never quote fees, plans, interest rates, product lists or availability from memory", text)
+        self.assertIn("never state any provider's fees, interest rates, plans, product lists", text)
         self.assertIn("Magyar Államkincstár", text)
         # an edited persona drops the section, but never the guardrails after it
         short = persona.compose_system_prompt("Short persona.", {}, "relative", False)
         self.assertNotIn("# Platforms", short)
         self.assertIn("Non-negotiable guardrails", short)
         self.assertIn("Evidence: never invent prices, figures, dates, quotes or events", short)  # fixed, not persona
+        for fixed in ("Uncertainty: never claim certainty", "likelihoods in percent", "confidence in your main conclusion",
+                      "Provider terms: never state any provider's fees", "Neutrality:", "Costs and taxes:"):
+            self.assertIn(fixed, short)
         # whatever the persona: without web access, no provider fees or terms from memory
         self.assertIn("Never state current fees, interest rates, plans or terms of any provider from memory", short)
         self.assertIn("purchase dates or platforms", short)  # relative level says platforms are withheld

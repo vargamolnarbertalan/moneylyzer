@@ -43,6 +43,7 @@ export function PersonaSettings() {
   const [prefBusy, setPrefBusy] = useState(false);
   const [prefMsg, setPrefMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [confirmShort, setConfirmShort] = useState(false);
+  const [confirmRec, setConfirmRec] = useState(false);
   const [understood, setUnderstood] = useState(false);
 
   useEffect(() => {
@@ -111,6 +112,19 @@ export function PersonaSettings() {
     }
   };
 
+  // Direct recommendations: switching on needs one confirming click; switching off is immediate.
+  const onRecommend = (checked: boolean) => {
+    if (checked) {
+      setConfirmRec(true);
+    } else {
+      setConfirmRec(false);
+      void savePrefs({ allow_recommendations: false }, "Direct recommendations are off.");
+    }
+  };
+  const enableRecommend = async () => {
+    if (await savePrefs({ allow_recommendations: true }, "Direct recommendations are on.")) setConfirmRec(false);
+  };
+
   const enableShortTerm = async () => {
     if (!understood) return;
     if (await savePrefs({ allow_short_term: true }, "Short-term help is on.")) setConfirmShort(false);
@@ -168,7 +182,7 @@ export function PersonaSettings() {
         className="form"
         onSubmit={(e) => {
           e.preventDefault();
-          const { allow_short_term: _keep, ...rest } = prefs;
+          const { allow_short_term: _keep, allow_recommendations: _keepRec, ...rest } = prefs;
           void savePrefs(rest);
         }}
       >
@@ -217,6 +231,27 @@ export function PersonaSettings() {
                 Enable
               </button>
               <button type="button" className="btn ghost small" onClick={() => setConfirmShort(false)} disabled={prefBusy}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="field">
+          <label className="check switch">
+            <input type="checkbox" checked={prefs.allow_recommendations || confirmRec} onChange={(e) => onRecommend(e.target.checked)} disabled={prefBusy} aria-describedby={confirmRec ? id("rec") : id("rech")} />
+            <span>Give me direct buy, sell and hold recommendations</span>
+          </label>
+          <span id={id("rech")} className="help">Off by default: the AI analyst sets out options and scenarios. On: it may recommend an action for a named holding, always with the likelihood, its confidence and the risks.</span>
+        </div>
+        {confirmRec && !prefs.allow_recommendations && (
+          <div id={id("rec")} className="warn-panel" role="group" aria-label="Confirm direct recommendations">
+            <p>The AI analyst is not a licensed adviser and can be wrong with confidence. Its recommendations come from your AI provider&rsquo;s model, not from Moneylyzer; you decide and you are responsible for the result.</p>
+            <div className="btn-row">
+              <button type="button" className="btn small" onClick={enableRecommend} disabled={prefBusy}>
+                Turn on recommendations
+              </button>
+              <button type="button" className="btn ghost small" onClick={() => setConfirmRec(false)} disabled={prefBusy}>
                 Cancel
               </button>
             </div>

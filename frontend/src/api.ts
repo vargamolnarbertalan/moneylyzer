@@ -254,6 +254,8 @@ export interface Preferences {
   horizon: Horizon;
   risk: Risk;
   allow_short_term: boolean;
+  /** Direct buy/sell/hold recommendations; confirmed opt-in, off by default. */
+  allow_recommendations: boolean;
   language: "auto" | "en" | "hu";
   /** Country of residence as the user wrote it; empty = the analyst infers it and asks. */
   country: string;

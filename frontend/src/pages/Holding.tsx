@@ -123,7 +123,7 @@ export function HoldingPage({ id }: { id: string }) {
             </div>
             <span className="tag">online · on send</span>
           </div>
-          <p className="sub">Open the AI analyst focused on this holding: its trend, its role in your portfolio and what to watch. Analysis, not advice.</p>
+          <p className="sub">Open the AI analyst focused on this holding: its trend, its role in your portfolio and what to watch.</p>
           <div className="btn-row" style={{ marginTop: 12 }}>
             <Link className="btn" to={`/analyst?holding=${encodeURIComponent(inst.instrument_id)}`}>
               Ask the AI analyst
