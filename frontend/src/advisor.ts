@@ -1,6 +1,6 @@
 // Advisor conversation helpers: the quick prompts, the sessionStorage-backed conversation, the hand-over
 // from the Overview card, and the history the API wants.
-import type { AdvisorAnswer, ChatTurn } from "./api";
+import type { AdvisorAnswer, ChatTurn, DataLevel } from "./api";
 import { readSession, removeSession, writeSession } from "./storage";
 
 export interface ChatMessage {
@@ -124,6 +124,15 @@ export function historyBefore(messages: readonly ChatMessage[], index: number): 
     .slice(0, index)
     .map((m) => ({ role: m.role, content: m.content }) satisfies ChatTurn)
     .slice(-MAX_HISTORY);
+}
+
+/** The sharing level this conversation's answers were written at (none yet: undefined). A conversation stays
+ *  at one level: the server refuses to continue it on a model whose level differs, so answers written
+ *  from full detail never reach a model on relative figures. */
+export function conversationLevel(messages: readonly ChatMessage[]): DataLevel | undefined {
+  const levels = messages.map((m) => m.meta?.shared?.data_level).filter((l): l is DataLevel => l !== undefined);
+  if (levels.length === 0) return undefined;
+  return levels.includes("full") ? "full" : "relative"; // one full-detail answer makes the conversation full detail
 }
 
 /** Only http(s) links are ever rendered as links. */

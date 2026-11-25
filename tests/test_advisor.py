@@ -1,8 +1,10 @@
 """Advisor layer: providers, persona, context privacy, feeds. No real network or model calls."""
 import json
+import re
 import tempfile
 import threading
 import unittest
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -67,6 +69,31 @@ class PersonaTests(unittest.TestCase):
         self.assertIn("- Country of residence (as the user wrote it): Hungary.", text)
         unset = persona.compose_system_prompt(None, {}, "relative", True)
         self.assertIn("Country of residence: not set", unset)
+
+    def test_app_guide_matches_the_apps_routes(self):
+        app = (Path(__file__).resolve().parents[1] / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
+        app = app[app.index("function route("):app.index("function AuthedApp")]  # pages only, not /login or redirects
+        self.assertNotIn("startsWith", app)  # every page is an exact path or a matchPath pattern the test can read
+        titles = dict(re.findall(r'path === "([^"]+)"\) return \{ title: "([^"]+)"', app))
+        for pattern, title in re.findall(r'matchPath\("([^"]+)".*?\n.*?title: "([^"]+)"', app):
+            titles[pattern] = title
+        self.assertEqual(titles, persona.APP_PAGES)  # a page added, removed or renamed must reach the guide
+        self.assertEqual(len(titles), app.count('title: "') - 1)  # every page was read (minus "Not found")
+        for name in persona.APP_PAGES.values():
+            self.assertIn(f"- {name}:", persona.APP_GUIDE)
+        src = Path(__file__).resolve().parents[1] / "frontend" / "src"
+        sections = set()
+        for rel in ("pages/Settings.tsx", "components/ai/AiModels.tsx", "components/ai/AdvisorRules.tsx",
+                    "components/ai/PersonaSettings.tsx"):
+            sections |= set(re.findall(r'title="([^"]+)"', (src / rel).read_text(encoding="utf-8")))
+        sections -= {"Delete rule"}  # a button tooltip, not a section
+        self.assertEqual(sections, set(persona.SETTINGS_SECTIONS))  # added or removed sections reach the guide
+        settings_line = persona.APP_GUIDE[persona.APP_GUIDE.index("- Settings:"):]
+        for section in sections:
+            self.assertIn(section, settings_line, f"Settings section {section!r} missing from the app guide")
+        text = persona.compose_system_prompt("Short persona.", {}, "relative", False)
+        self.assertIn("you cannot change anything in the app", text)  # fixed: an edited persona keeps it
+        self.assertLess(text.index("Non-negotiable guardrails"), text.index("# The app you work in"))
 
     def test_default_persona_checks_platform_terms_live(self):
         text = persona.compose_system_prompt(None, {}, "relative", False)
@@ -177,6 +204,7 @@ class AnthropicTests(TempDb):
             out = llm.complete(p, "SYS", [{"role": "user", "content": "q"}])
         self.assertEqual(ctor.call_args.kwargs["api_key"], "sk-ant-test")
         kwargs = client.beta.messages.create.call_args_list[0].kwargs
+        self.assertEqual(kwargs["system"], [{"type": "text", "text": "SYS", "cache_control": {"type": "ephemeral"}}])
         self.assertEqual(kwargs["fallbacks"], "default")
         self.assertEqual(kwargs["betas"], ["server-side-fallback-2026-07-01"])
         self.assertEqual(kwargs["tools"][0]["type"], "web_search_20260209")
@@ -338,11 +366,42 @@ class ContextPrivacyTests(TempDb):
 
         with mock.patch("analyzer.advisor.complete", fake_complete):
             out = advisor.ask(None, "How concentrated am I?", [{"role": "user", "content": "earlier"},
-                                                              {"role": "assistant", "content": "reply"}], self.snapshot())
+                                                              {"role": "assistant", "content": "reply"}], self.snapshot(),
+                              expected_level="relative")
         self.assertEqual(out["shared"]["data_level"], "relative")
         self.assertEqual(captured["messages"][0]["content"], "earlier")
         self.assertIn("<question>", captured["messages"][-1]["content"])
         self.assertIn("Non-negotiable guardrails", captured["system"])
+        # the time goes with the question; the system prompt stays the same from call to call (cacheable)
+        self.assertIn("Current date and time (UTC):", captured["messages"][-1]["content"])
+        self.assertNotIn("Current date", captured["system"])
+        first = captured["system"]
+        with mock.patch("analyzer.advisor.complete", fake_complete):
+            advisor.ask(None, "Again", [], self.snapshot(), now=datetime(2030, 1, 1, tzinfo=timezone.utc))
+        self.assertEqual(captured["system"], first)
+        self.assertIn("2030-01-01 00:00", captured["messages"][-1]["content"])
+
+    def test_a_conversation_stays_at_its_sharing_level(self):
+        sent = mock.Mock(return_value={"text": "ok", "model": "m", "sources": []})
+        history = [{"role": "user", "content": "q"}, {"role": "assistant", "content": "777 units"}]
+        with mock.patch("analyzer.advisor.complete", sent):
+            with self.assertRaises(advisor.LevelChanged):  # the built-in model is on relative figures
+                advisor.ask(None, "And now?", history, self.snapshot(), expected_level="full")
+            with self.assertRaises(advisor.LevelChanged):  # answers but no level (an old tab): refused too
+                advisor.ask(None, "And now?", history, self.snapshot())
+            sent.assert_not_called()  # a refused question reaches no model
+            self.assertEqual(advisor.ask(None, "q", [], self.snapshot())["text"], "ok")  # a new conversation always works
+            self.assertEqual(advisor.ask(None, "q", history, self.snapshot(), expected_level="relative")["text"], "ok")
+
+    def test_notes_only_at_full_detail_price_units_always(self):
+        db.upsert_instrument({"instrument_id": "DEMO", "name": "Demo ETF", "asset_type": "etf", "currency": "EUR",
+                              "price_divisor": 100, "notes": "Inherited from grandma, keep"})
+        rel = advisor.build_context(self.snapshot(), "relative")["portfolio"]["holdings"][0]
+        full = advisor.build_context(self.snapshot(), "full")["portfolio"]["holdings"][0]
+        self.assertNotIn("notes", rel)
+        self.assertEqual(full["notes"], "Inherited from grandma, keep")
+        self.assertEqual(rel["price_divisor"], 100.0)
+        self.assertEqual(full["price_divisor"], 100.0)
 
     def test_rules_are_stored_apart_from_preferences(self):
         advisor.save_settings(None, None, rules=["Only EUR holdings"])

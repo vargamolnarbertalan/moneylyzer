@@ -2,13 +2,15 @@
 
 Privacy: the context is built per provider data level.
 - "relative" (default): names, tickers, types, currencies, weights, % changes, indicators.
-- "full": additionally amounts in the reporting currency, quantities, average costs and purchase lots with dates.
+- "full": additionally amounts in the reporting currency, quantities, average costs, purchase lots with dates
+  and platforms, holding notes and data checks.
 """
 from __future__ import annotations
 
 import json
 import math
 import uuid
+from datetime import datetime, timezone
 
 import pandas as pd
 
@@ -120,7 +122,8 @@ def delete_provider(provider_id: str) -> None:
 
 
 def set_data_level(provider_id: str, level: str) -> None:
-    """What a model may see: 'relative' (weights, % changes) or 'full' (amounts, quantities, dates)."""
+    """What a model may see: 'relative' (weights, % changes) or 'full' (also amounts, quantities, costs, dates,
+    platforms and holding notes)."""
     if level not in ("relative", "full"):
         raise ValueError("data_level must be relative or full")
     with db.connect() as conn:
@@ -143,6 +146,11 @@ def get_settings() -> dict:
     rules = normalize_rules(json.loads(rows.get("rules") or "[]"))
     return {"persona": persona, "is_default_persona": persona.strip() == DEFAULT_PERSONA.strip(),
             "default_persona": DEFAULT_PERSONA, "preferences": prefs, "rules": rules}
+
+
+class LevelChanged(Exception):
+    """The conversation was written at another sharing level than the model now has: its earlier answers
+    (perhaps with amounts) must not reach a model that may only see relative figures."""
 
 
 class RulesConflict(ValueError):
@@ -205,8 +213,17 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
     rows = snapshot.get("rows", [])
     keys = FULL_ROW_KEYS if level == "full" else RELATIVE_ROW_KEYS
     holdings, series = [], {}
+    instruments = {str(i["instrument_id"]): i for i in db.get_instruments().to_dict("records")}
     for r in rows:
         item = {k: _r(r.get(k)) for k in keys}
+        inst = instruments.get(str(r["id"]), {})
+        item["price_divisor"] = _r(float(inst.get("price_divisor") or 1))
+        if level == "full":
+            notes = _text_or_none(inst.get("notes"))
+            if notes:
+                item["notes"] = " ".join(notes.split())[:1000]  # the owner's own words; CSV imports have no cap
+            if r.get("check"):
+                item["check"] = r["check"]  # data problems (may quote units), full detail only
         hist = db.get_prices(r["id"])
         if not hist.empty:
             m = analyze_history({"asset_type": r["type"]}, hist)
@@ -259,22 +276,31 @@ def render_context(ctx: dict) -> str:
 
 
 def ask(provider_id: str | None, question: str, history: list[dict], snapshot: dict,
-        instrument_id: str | None = None) -> dict:
+        instrument_id: str | None = None, now: datetime | None = None, expected_level: str | None = None) -> dict:
     question = (question or "").strip()
     if not question:
         raise ValueError("Ask a question first.")
     if len(question) > MAX_QUESTION_CHARS:
         raise ValueError(f"Keep the question under {MAX_QUESTION_CHARS} characters.")
     provider = get_provider(provider_id)
+    # A conversation with answers must say which level they were written at, and match the model's level
+    # (a tab with older code sends none). A new conversation is never refused.
+    answered = any(m.get("role") == "assistant" for m in (history or []))
+    if answered and expected_level != provider.data_level:
+        raise LevelChanged("This model's sharing level changed since this conversation started. "
+                           "Start a new conversation to go on.")
     settings = get_settings()
     ctx = build_context(snapshot, provider.data_level, instrument_id)
     shared = {"data_level": provider.data_level, "holdings": len(ctx["portfolio"]["holdings"]),
+              "notes": sum(1 for h in ctx["portfolio"]["holdings"] if h.get("notes")),
               "benchmarks": len(ctx["market"]), "news_items": len(ctx["news"]), "web_research": provider.can_browse}
     system = compose_system_prompt(settings["persona"], settings["preferences"], provider.data_level, provider.can_browse,
                                    rules=settings["rules"])
     turns = [m for m in (history or []) if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
     turns = turns[-2 * MAX_HISTORY_TURNS:]
     focus = f"\nFocus on holding {instrument_id}." if instrument_id else ""
-    user_msg = f"{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
+    # The time travels with the question, not in the system prompt, which stays a stable cacheable prefix.
+    stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
+    user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}])
     return {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind}, "shared": shared}

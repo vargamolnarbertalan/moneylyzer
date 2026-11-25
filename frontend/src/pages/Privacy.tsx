@@ -78,7 +78,7 @@ const FLOWS: readonly Flow[] = [
     gets: "the answer and the sources it used.",
     linkable: "account",
     linkNote: "Yes: the provider knows the account you connected (Claude login or API key) and can link every question to it. A local model stays on your network.",
-    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase history and where you hold what (financial data).",
+    sensitive: "Your portfolio's composition and your goals; with full detail also your amounts, purchase history, where you hold what and your holding notes (free text).",
   },
   {
     name: "npm (once)",

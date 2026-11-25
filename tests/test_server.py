@@ -291,6 +291,17 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(self.client.patch("/api/prefs", json={"theme": "light"}, headers=H).status_code, 200)
 
+    def test_a_conversation_at_another_sharing_level_is_refused(self):
+        self.setup_account()
+        body = {"question": "And now?", "history": [{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}],
+                "expected_level": "full"}  # the built-in model is on relative figures
+        with mock.patch.object(live.hub, "snapshot", {"rows": [], "totals": {}}), \
+             mock.patch("analyzer.advisor.complete") as sent:
+            r = self.client.post("/api/advisor/ask", json=body, headers=H)
+        self.assertEqual(r.status_code, 409)
+        self.assertIn("Start a new conversation", r.json()["detail"])
+        sent.assert_not_called()
+
     def test_edit_form_never_recreates_a_deleted_holding(self):
         self.setup_account()
         body = {"instrument_id": "GONE", "name": "Gone", "asset_type": "etf", "quantity": 1, "currency": "EUR"}

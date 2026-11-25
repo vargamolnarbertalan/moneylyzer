@@ -668,6 +668,8 @@ class AskBody(BaseModel):
     history: list[dict] = Field(default_factory=list, max_length=40)
     provider_id: str | None = Field(default=None, max_length=32)
     instrument_id: str | None = Field(default=None, max_length=64)
+    # the level the conversation's answers were written at: a model whose level changed meanwhile gets a 409
+    expected_level: Literal["relative", "full"] | None = None
 
 
 @app.get("/api/ai/presets")
@@ -703,7 +705,7 @@ def ai_provider_delete(provider_id: str, user: str = Depends(auth.require_user))
 
 class DataLevelBody(BaseModel):
     data_level: Literal["relative", "full"]
-    # "full" sends amounts, quantities, purchase dates and platforms to the model: the client must confirm it explicitly
+    # "full" sends amounts, quantities, costs, purchase dates, platforms and holding notes: the client must confirm it
     confirm_full: bool = False
 
 
@@ -765,7 +767,9 @@ async def advisor_ask(body: AskBody, user: str = Depends(auth.require_user)):
         raise HTTPException(404, "No such holding.")
     try:
         result = await asyncio.to_thread(advisor.ask, body.provider_id, body.question, body.history, snapshot,
-                                         body.instrument_id)
+                                         body.instrument_id, expected_level=body.expected_level)
+    except advisor.LevelChanged as exc:
+        raise HTTPException(409, str(exc)) from None
     except KeyError as exc:
         raise HTTPException(404, str(exc)) from None
     except (ValueError, llm.LLMError) as exc:

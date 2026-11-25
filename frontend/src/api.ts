@@ -205,7 +205,7 @@ export interface AppSettings {
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
 export type DataLevel = "relative" | "full";
 /** What "full detail" adds, in one place for every text that describes it (server: analyzer/persona.py). */
-export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, purchase dates and platforms";
+export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, purchase dates, platforms and holding notes";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {
@@ -283,6 +283,8 @@ export interface AdvisorShared {
   benchmarks: number;
   news_items: number;
   web_research: boolean;
+  /** Holdings whose notes were sent (full detail only). */
+  notes?: number;
 }
 
 export interface AdvisorSource {
@@ -475,7 +477,8 @@ export const endpoints = {
   prefs: () => api.get<Record<string, unknown>>("/api/prefs"),
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
   saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
-  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string }) =>
+  /** expected_level: the level the conversation's answers were written at (409 if the model's level changed). */
+  ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
 };

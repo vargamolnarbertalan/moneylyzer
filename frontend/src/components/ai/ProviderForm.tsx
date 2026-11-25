@@ -13,7 +13,9 @@ export const KIND_LABEL: Record<ProviderKind, string> = {
 const EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
 const CUSTOM: Preset = { id: "custom", label: "Custom OpenAI-compatible", kind: "openai_compat", base_url: "", models: [], local: false, needs_key: false };
 const LOCAL_HINT =
-  "From the Docker container your PC is host.docker.internal. Ollama listens on 127.0.0.1 by default; if the container can't reach it, start Ollama with OLLAMA_HOST=0.0.0.0.";
+  "From the Docker container your PC is host.docker.internal. Ollama listens on 127.0.0.1 by default; if the container can't reach it, start Ollama with OLLAMA_HOST=0.0.0.0. " +
+  // measured: instructions 2-9k tokens (default to longest custom persona), news up to ~9k, plus holdings and history
+  "Give the model a context window of 32,000 tokens or more (Ollama: OLLAMA_CONTEXT_LENGTH=32768; LM Studio: Context Length when loading the model; llama.cpp: -c 32768). A typical question with its instructions, portfolio and news is about 15,000 tokens, and a shorter window cuts off the start, safety rules included.";
 
 /** The same rule the server uses to decide that a base URL stays on your network. */
 export function isLocalUrl(url: string): boolean {
@@ -131,7 +133,7 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
     ) : null;
   };
   const describe = (f: FieldName, help?: string) => [help, fieldError(f) ? id(`${f}e`) : null].filter(Boolean).join(" ") || undefined;
-  const showLocalHint = (mode === "add" ? preset?.local : provider?.local) === true;
+  const showLocalHint = (mode === "add" ? preset?.local === true : provider?.local === true) || (kind === "openai_compat" && isLocalUrl(baseUrl));
   const generalError = error && error.field === null ? error.message : null;
 
   return (

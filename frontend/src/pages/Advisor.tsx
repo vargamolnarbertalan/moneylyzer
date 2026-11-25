@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
-import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
-import { FULL_DETAIL_ITEMS, endpoints, errorMessage, type Provider } from "../api";
+import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
+import { ApiError, FULL_DETAIL_ITEMS, endpoints, errorMessage, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
 import { Select } from "../components/Select";
@@ -23,6 +23,8 @@ export function AdvisorPage() {
   chatRef.current = chat;
   const [waiting, setWaiting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  // the model's sharing level changed (409): retrying cannot work, only a new conversation
+  const [stale, setStale] = useState(false);
   const [draft, setDraft] = useState("");
   const endRef = useRef<HTMLDivElement | null>(null);
   const areaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -64,16 +66,23 @@ export function AdvisorPage() {
       setFailure(null);
       try {
         const body: Parameters<typeof endpoints.ask>[0] = { question, history: historyBefore(before, before.length) };
+        const level = conversationLevel(before);
+        if (level) body.expected_level = level;
         const pid = chatRef.current.providerId;
         if (pid) body.provider_id = pid;
         if (holding) body.instrument_id = holding;
         const res = await endpoints.ask(body);
         setChat((c) => ({
           ...c,
+          providerId: c.providerId ?? res.provider.id, // later questions go to the model that answered, not a new default
           messages: [...c.messages, { id: newId(), role: "assistant", content: res.text, meta: { provider: res.provider, model: res.model, sources: res.sources ?? [], shared: res.shared } }],
         }));
       } catch (err) {
         setFailure(errorMessage(err));
+        if (err instanceof ApiError && err.status === 409) {
+          setStale(true);
+          providers.reload();
+        }
       } finally {
         busy.current = false;
         setWaiting(false);
@@ -122,8 +131,9 @@ export function AdvisorPage() {
 
   const newConversation = () => {
     clearChat();
-    setChat({ providerId: chat.providerId, messages: [] });
+    setChat({ providerId: selected?.id ?? null, messages: [] });
     setFailure(null);
+    setStale(false);
     setDraft("");
   };
 
@@ -143,13 +153,28 @@ export function AdvisorPage() {
               id={modelId}
               value={selected?.id ?? ""}
               disabled={waiting || list.length === 0}
-              onValueChange={(v) => setChat((c) => ({ ...c, providerId: v }))}
+              noClosedTypeahead
+              aria-describedby={empty ? undefined : `${modelId}h`}
+              onValueChange={(v) => {
+                // another model starts a new conversation: earlier answers stay with the model (and the
+                // sharing level) they were written for
+                if (v === chatRef.current.providerId) return;
+                clearChat();
+                setChat({ providerId: v, messages: [] });
+                setFailure(null);
+                setStale(false);
+              }}
               options={
                 list.length === 0
                   ? [{ value: "", label: providers.loading ? "Loading…" : "No model" }]
                   : list.map((p) => ({ value: p.id, label: `${p.name} · ${p.model}` }))
               }
             />
+            {!empty && (
+              <span id={`${modelId}h`} className="help">
+                Changing the model starts a new conversation.
+              </span>
+            )}
           </div>
           <div className="chat-head-side">
             {selected && (
@@ -235,7 +260,7 @@ export function AdvisorPage() {
           {failure && !waiting && (
             <Alert tone="err">
               {failure}
-              {lastIsUser && (
+              {lastIsUser && !stale && (
                 <>
                   {" "}
                   <button type="button" className="link-btn" onClick={retry}>
@@ -314,6 +339,7 @@ function Answer({ m }: { m: ChatMessage }) {
             <li>
               {shared.holdings} {shared.holdings === 1 ? "holding" : "holdings"} · {shared.benchmarks} market {shared.benchmarks === 1 ? "benchmark" : "benchmarks"} · {shared.news_items} news {shared.news_items === 1 ? "item" : "items"}
             </li>
+            {(shared.notes ?? 0) > 0 && <li>{shared.notes === 1 ? "1 holding note" : `${shared.notes} holding notes`}</li>}
             <li>Web research: {shared.web_research ? "on" : "off"}</li>
           </ul>
         </details>
