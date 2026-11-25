@@ -3,10 +3,10 @@ import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal,
 import { AI_ANSWER_NOTE } from "../legal";
 import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
 import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type Provider } from "../api";
-import { EFFORT_LABEL, effortOptions, effortPhrase } from "../effort";
+import { effortPhrase } from "../effort";
+import { ChatPickers, chatModel, withEffort } from "../components/ai/ChatPickers";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
-import { Select } from "../components/Select";
 import { Markdown } from "../components/Markdown";
 import { useResource, useTitle } from "../hooks";
 import { useLive } from "../live";
@@ -36,14 +36,9 @@ export function AdvisorPage() {
   const hiddenPrompts = QUICK_PROMPTS.length - QUICK_PROMPTS_SHOWN;
 
   const list: Provider[] = providers.data ?? [];
-  const selected = list.find((p) => p.id === chat.providerId) ?? list.find((p) => p.is_default) ?? list[0] ?? null;
   const holdingName = holdingId ? (live.snapshot?.rows.find((r) => r.id === holdingId)?.name ?? holdingId) : null;
   // Claude models take an effort; a choice made here applies to this conversation only (never saved to the model).
-  // The choice belongs to the model it was made for: any other model (a new default, a deleted one) starts from its own.
-  const takesEffort = selected?.takes_effort === true;
-  const chosen = selected && chat.providerId === selected.id ? (chat.effort ?? null) : null;
-  const effort: Effort | null = selected && takesEffort ? (chosen ?? selected.effort) : null;
-  const overridden = takesEffort && chosen != null && chosen !== selected?.effort;
+  const { selected, effort } = chatModel(chat, list);
   // What the picker shows is what the next question sends.
   const effortRef = useRef<Effort | null>(effort);
   effortRef.current = effort;
@@ -151,7 +146,6 @@ export function AdvisorPage() {
 
   const textareaId = useId();
   const modelId = useId();
-  const effortId = useId();
   const rows = Math.min(6, Math.max(2, draft.split("\n").length));
   const empty = chat.messages.length === 0;
   const lastIsUser = chat.messages[chat.messages.length - 1]?.role === "user";
@@ -160,65 +154,22 @@ export function AdvisorPage() {
     <div className="advisor-layout">
       <Card as="section" className="chat" aria-label="AI analyst chat">
         <div className="chat-head">
-          <div className="chat-pickers">
-          <div className="field chat-model">
-            <label htmlFor={modelId}>Model</label>
-            <Select
-              id={modelId}
-              value={selected?.id ?? ""}
-              disabled={waiting || list.length === 0}
-              noClosedTypeahead
-              aria-describedby={empty ? undefined : `${modelId}h`}
-              onValueChange={(v) => {
-                // another model starts a new conversation: earlier answers stay with the model (and the
-                // sharing level) they were written for
-                if (v === chatRef.current.providerId) return;
-                clearChat();
-                setChat({ providerId: v, messages: [] });
-                setFailure(null);
-                setStale(false);
-              }}
-              options={
-                list.length === 0
-                  ? [{ value: "", label: providers.loading ? "Loading…" : "No model" }]
-                  : list.map((p) => ({ value: p.id, label: `${p.name} · ${p.model}` }))
-              }
-            />
-            {!empty && (
-              <span id={`${modelId}h`} className="help">
-                Changing the model starts a new conversation.
-              </span>
-            )}
-          </div>
-          <div className="field chat-effort">
-            {takesEffort && effort ? (
-              <>
-                <label htmlFor={effortId}>Effort</label>
-                <Select
-                  id={effortId}
-                  value={effort}
-                  disabled={waiting}
-                  noClosedTypeahead
-                  aria-describedby={`${effortId}h`}
-                  onValueChange={(v) => setChat((c) => ({ ...c, providerId: selected?.id ?? c.providerId, effort: v as Effort }))}
-                  options={effortOptions()}
-                />
-                <span id={`${effortId}h`} className="help">
-                  {overridden && selected
-                    ? `This chat only (saved: ${EFFORT_LABEL[selected.effort].toLowerCase()}).`
-                    : "Higher is slower and uses more."}
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="lbl">Effort</span>
-                <span className="static-value">
-                  {!selected ? "—" : selected.kind === "openai_compat" ? "Set by the provider" : "Not supported by this model"}
-                </span>
-              </>
-            )}
-          </div>
-          </div>
+          <ChatPickers
+            chat={chat}
+            list={list}
+            loading={providers.loading}
+            disabled={waiting}
+            modelId={modelId}
+            onModel={(v) => {
+              // another model starts a new conversation: earlier answers stay with the model (and the
+              // sharing level) they were written for
+              clearChat();
+              setChat({ providerId: v, messages: [] });
+              setFailure(null);
+              setStale(false);
+            }}
+            onEffort={(v) => setChat((c) => withEffort(c, selected, v))}
+          />
           <div className="chat-head-side">
             {selected && (
               <Link className={selected.data_level === "full" && !selected.local ? "share-pill warn" : "share-pill"} to="/privacy#ai">
@@ -317,6 +268,28 @@ export function AdvisorPage() {
           <div ref={endRef} />
         </div>
 
+        {selected && (
+          <div className="composer-model">
+            <span>
+              Answers with <b>{selected.name}</b> · {selected.model}
+              {effort ? ` · ${effortPhrase(effort)}` : ""}
+            </span>
+            <button
+              type="button"
+              className="btn ghost small"
+              disabled={waiting}
+              onClick={() => {
+                // the pickers sit at the top of the chat, out of view in a long conversation
+                const picker = document.getElementById(modelId);
+                const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+                picker?.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+                picker?.focus({ preventScroll: true });
+              }}
+            >
+              Change<span className="sr-only"> the model or effort</span>
+            </button>
+          </div>
+        )}
         <form className="composer" onSubmit={submit}>
           <label className="sr-only" htmlFor={textareaId}>
             Ask the AI analyst
