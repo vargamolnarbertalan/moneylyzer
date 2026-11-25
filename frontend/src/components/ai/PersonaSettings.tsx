@@ -9,6 +9,7 @@ import { Select } from "../Select";
 
 const MAX_PERSONA = 20000;
 const MAX_NOTES = 2000;
+const MAX_COUNTRY = 60; // analyzer/persona.py MAX_COUNTRY_CHARS
 
 const HORIZONS: readonly { value: Horizon; label: string }[] = [
   { value: "short", label: "Short (under 2 years)" },
@@ -80,7 +81,9 @@ export function PersonaSettings() {
     }
   };
 
-  const savePrefs = async (next: Preferences, okText = "Preferences saved.") => {
+  // Only the keys given are saved (the server merges), so a tab loaded earlier cannot undo the short-term
+  // switch from another device: the switch sends only allow_short_term, the form never sends it.
+  const savePrefs = async (next: Partial<Preferences>, okText = "Preferences saved.") => {
     setPrefBusy(true);
     setPrefMsg(null);
     try {
@@ -104,13 +107,13 @@ export function PersonaSettings() {
       setConfirmShort(true);
     } else {
       setConfirmShort(false);
-      void savePrefs({ ...prefs, allow_short_term: false }, "Short-term help is off.");
+      void savePrefs({ allow_short_term: false }, "Short-term help is off.");
     }
   };
 
   const enableShortTerm = async () => {
     if (!understood) return;
-    if (await savePrefs({ ...prefs, allow_short_term: true }, "Short-term help is on.")) setConfirmShort(false);
+    if (await savePrefs({ allow_short_term: true }, "Short-term help is on.")) setConfirmShort(false);
   };
 
   return (
@@ -165,7 +168,8 @@ export function PersonaSettings() {
         className="form"
         onSubmit={(e) => {
           e.preventDefault();
-          void savePrefs(prefs);
+          const { allow_short_term: _keep, ...rest } = prefs;
+          void savePrefs(rest);
         }}
       >
         <div className="form-grid">
@@ -180,6 +184,11 @@ export function PersonaSettings() {
           <div className="field">
             <label htmlFor={id("lang")}>Answer language</label>
             <Select id={id("lang")} value={prefs.language} onValueChange={(v) => set("language", v as Preferences["language"])} options={LANGUAGES} />
+          </div>
+          <div className="field">
+            <label htmlFor={id("country")}>Country you live in</label>
+            <input id={id("country")} type="text" value={prefs.country} maxLength={MAX_COUNTRY} autoComplete="country-name" onChange={(e) => set("country", e.target.value)} placeholder="e.g. Hungary" aria-describedby={id("countryh")} />
+            <span id={id("countryh")} className="help">So the analyst compares the banks, brokers and apps you can actually use. Empty: it works it out from your data and asks when unsure. Sent with every question.</span>
           </div>
           <div className="field wide">
             <label htmlFor={id("notes")}>Notes</label>

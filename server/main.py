@@ -647,7 +647,7 @@ class ProviderBody(BaseModel):
     kind: Literal["claude_code", "anthropic", "openai_compat"]
     model: str = Field(min_length=1, max_length=128)
     base_url: str = Field(default="", max_length=300)
-    data_level: Literal["relative", "full"] = "relative"
+    data_level: Literal["relative", "full"] = "relative"  # ignored: set only via /data-level (full needs confirm)
     web_research: bool = False
     effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
     api_key: str | None = Field(default=None, max_length=500)
@@ -703,7 +703,7 @@ def ai_provider_delete(provider_id: str, user: str = Depends(auth.require_user))
 
 class DataLevelBody(BaseModel):
     data_level: Literal["relative", "full"]
-    # "full" sends amounts, quantities and purchase dates to the model: the client must confirm it explicitly
+    # "full" sends amounts, quantities, purchase dates and platforms to the model: the client must confirm it explicitly
     confirm_full: bool = False
 
 

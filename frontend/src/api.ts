@@ -204,6 +204,8 @@ export interface AppSettings {
 
 export type ProviderKind = "claude_code" | "anthropic" | "openai_compat";
 export type DataLevel = "relative" | "full";
+/** What "full detail" adds, in one place for every text that describes it (server: analyzer/persona.py). */
+export const FULL_DETAIL_ITEMS = "amounts, quantities, costs, purchase dates and platforms";
 export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
 
 export interface Provider {
@@ -253,6 +255,8 @@ export interface Preferences {
   risk: Risk;
   allow_short_term: boolean;
   language: "auto" | "en" | "hu";
+  /** Country of residence as the user wrote it; empty = the analyst infers it and asks. */
+  country: string;
   notes: string;
 }
 
@@ -470,7 +474,7 @@ export const endpoints = {
   /** View preferences synced across devices (src/prefs.ts). PATCH sets or clears (null) only the keys sent. */
   prefs: () => api.get<Record<string, unknown>>("/api/prefs"),
   savePrefs: (changes: Record<string, unknown>) => api.patch<Record<string, unknown>>("/api/prefs", changes),
-  saveAiSettings: (body: { persona?: string; preferences?: Preferences; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
+  saveAiSettings: (body: { persona?: string; preferences?: Partial<Preferences>; rules?: string[]; rules_expected?: string[] }) => api.put<AiSettings>("/api/ai/settings", body),
   ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
