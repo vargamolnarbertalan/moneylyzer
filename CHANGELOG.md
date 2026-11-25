@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.1.0
+- AI analyst knows the app: what each page shows and where each setting lives, and it tells you where to make a change.
+- AI analyst compares banks, brokers, trading apps and the state's own channels (for example Magyar Államkincstár via WebKincstár) in your country, checking fees and terms live with sources; without web access it quotes no fees.
+- New optional setting: the country you live in (Settings → AI analyst persona).
+- Eleven quick questions modelled on paid tools: diversification and risk scores, SWOT, stress test, goal setup, platforms and fees, five perspectives, rules and drift, buying habits, daily briefing and what to watch.
+- Simpler privacy: one choice per AI model, relative figures or full detail, confirmed with one click (local models need none). Full detail now also includes purchase platforms and holding notes.
+- A conversation stays with one AI model: picking another starts a new one, and a conversation is never continued on a model whose sharing level changed.
+- Local models: reachable on Linux Docker too (`host.docker.internal`), with a hint on setting a large enough context window.
+- Fixes: oversized requests are refused before anything runs; live tables keep their row order while you move through them with the keyboard; a holding deleted on another device cannot come back from an open edit form; CSV files over 5 MB are refused before uploading; the purchases filter is per page; focus is kept after failed deletes and on Data & privacy.
+
 ## 1.0.0
 - New UI: React + Vite + TypeScript ("Aurora" design), responsive down to phone width, live updates pushed over Server-Sent Events.
 - New server: FastAPI on one port serving the API, the live stream and the built UI; one Docker image (docker compose up -d --build); data on the `lia-data` volume.
