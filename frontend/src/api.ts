@@ -513,7 +513,7 @@ export const endpoints = {
   saveProvider: (body: ProviderInput) => api.post<{ id: string }>("/api/ai/providers", body),
   /** The provider's own model list (Claude API or OpenAI-compatible); a saved key is used when none is typed. */
   listModels: (body: { kind: "anthropic" | "openai_compat"; base_url: string; api_key?: string; provider_id?: string }) =>
-    api.post<{ models: string[] }>("/api/ai/models", body),
+    api.post<{ models: string[]; total: number }>("/api/ai/models", body),
   deleteProvider: (id: string) => api.del<{ ok: boolean }>(`/api/ai/providers/${encodeURIComponent(id)}`),
   makeDefaultProvider: (id: string) => api.post<{ ok: boolean }>(`/api/ai/providers/${encodeURIComponent(id)}/default`),
   testProvider: (id: string) => api.post<{ ok: boolean; model: string; reply: string }>(`/api/ai/providers/${encodeURIComponent(id)}/test`),

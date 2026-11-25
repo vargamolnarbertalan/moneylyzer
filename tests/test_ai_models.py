@@ -95,7 +95,7 @@ class ModelListTests(unittest.TestCase):
         _FakeModels.status = 200
 
     def test_openai_compatible_list(self):
-        self.assertEqual(llm.list_models("openai_compat", self.base + "/", None), ["gpt-x", "llama3.1:8b"])
+        self.assertEqual(llm.list_models("openai_compat", self.base + "/", None), {"models": ["gpt-x", "llama3.1:8b"], "total": 2})
         self.assertEqual(_FakeModels.seen, {"path": "/v1/models", "auth": None})
         llm.list_models("openai_compat", self.base, "sk-1")
         self.assertEqual(_FakeModels.seen["auth"], "Bearer sk-1")
@@ -109,13 +109,58 @@ class ModelListTests(unittest.TestCase):
         with self.assertRaisesRegex(llm.LLMError, "no model list"):
             llm.list_models("claude_code", "", None)
 
+    def test_a_key_never_goes_over_plain_http_to_the_internet(self):
+        with mock.patch.object(llm._opener, "open") as opened:
+            with self.assertRaisesRegex(llm.LLMError, "Use https"):
+                llm.list_models("openai_compat", "http://api.openai.com/v1", "sk-1")
+            with self.assertRaisesRegex(llm.LLMError, "must use https"):
+                llm.list_models("anthropic", "http://proxy.example.com", "sk-ant")
+        opened.assert_not_called()
+
+    def test_a_redirect_is_not_followed_with_the_key(self):
+        target = HTTPServer(("127.0.0.1", 0), _FakeModels)
+        threading.Thread(target=target.serve_forever, daemon=True).start()
+        self.addCleanup(target.server_close)
+        self.addCleanup(target.shutdown)
+
+        class Redirect(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://localhost:{target.server_port}/v1/models")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *args):
+                pass
+
+        hop = HTTPServer(("127.0.0.1", 0), Redirect)
+        threading.Thread(target=hop.serve_forever, daemon=True).start()
+        self.addCleanup(hop.server_close)
+        self.addCleanup(hop.shutdown)
+        _FakeModels.seen = {}
+        with self.assertRaisesRegex(llm.LLMError, "redirected"):
+            llm.list_models("openai_compat", f"http://127.0.0.1:{hop.server_port}/v1", "sk-SECRET")
+        self.assertEqual(_FakeModels.seen, {})  # the other host never saw the request, let alone the key
+
+    def test_bad_keys_and_broken_servers_are_readable_errors(self):
+        with self.assertRaisesRegex(llm.LLMError, "paste it again"):
+            llm.list_models("openai_compat", self.base, "sk-abc\ndef")
+        with self.assertRaisesRegex(llm.LLMError, "not valid"):
+            llm.list_models("openai_compat", "http://localhost:11434x/v1", None)
+        with mock.patch.object(llm._opener, "open", side_effect=llm.http.client.RemoteDisconnected("closed")):
+            with self.assertRaisesRegex(llm.LLMError, r"Bad or slow response .*\(RemoteDisconnected\)") as caught:
+                llm.list_models("openai_compat", self.base, "sk-SECRET")
+        self.assertNotIn("sk-SECRET", str(caught.exception))
+
     def test_claude_api_list_uses_the_sdk(self):
         with self.assertRaisesRegex(llm.LLMError, "API key first"):
             llm.list_models("anthropic", "", None)
         client = mock.Mock()
-        client.models.list.return_value = iter([SimpleNamespace(id="claude-opus-5-5"), SimpleNamespace(id="claude-haiku-5-5")])
+        client.models.list.return_value = iter([SimpleNamespace(id="claude-opus-5-5"), SimpleNamespace(id="claude-haiku-5-5"),
+                                                SimpleNamespace(id="claude-opus-5-5"), SimpleNamespace(id=None), SimpleNamespace()])
         with mock.patch("anthropic.Anthropic", return_value=client) as ctor:
-            self.assertEqual(llm.list_models("anthropic", "", "sk-ant"), ["claude-opus-5-5", "claude-haiku-5-5"])
+            self.assertEqual(llm.list_models("anthropic", "", "sk-ant"),
+                             {"models": ["claude-opus-5-5", "claude-haiku-5-5"], "total": 2})
         self.assertEqual(ctor.call_args.kwargs["api_key"], "sk-ant")
         self.assertIsNone(ctor.call_args.kwargs["base_url"])
 

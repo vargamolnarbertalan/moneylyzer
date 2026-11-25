@@ -10,6 +10,7 @@ Three kinds:
 """
 from __future__ import annotations
 
+import http.client
 import json
 import logging
 import os
@@ -107,14 +108,34 @@ def validate(p: Provider) -> None:
         raise LLMError("data_level must be relative or full")
     if p.effort not in EFFORTS:
         raise LLMError("effort must be default, low, medium, high, xhigh or max")
-    if p.kind == "openai_compat":
-        url = urllib.parse.urlparse(p.base_url)
+    check_base_url(p.kind, p.base_url)
+
+
+def check_base_url(kind: str, base_url: str) -> None:
+    """Where a key may be sent: https, or plain http only to a local/LAN server."""
+    if kind == "openai_compat":
+        try:
+            url = urllib.parse.urlparse(base_url)
+            url.port  # noqa: B018 - raises ValueError on a malformed port
+        except ValueError:
+            raise LLMError("That base URL is not valid.") from None
         if url.scheme not in ("http", "https") or not url.hostname:
             raise LLMError("Enter the provider's base URL, e.g. https://api.openai.com/v1")
-        if url.scheme == "http" and not p.is_local:
+        if url.scheme == "http" and not Provider(id="", name="", kind=kind, model="x", base_url=base_url).is_local:
             raise LLMError("Use https for internet providers (plain http only for local/LAN servers).")
-    if p.kind == "anthropic" and p.base_url and not p.base_url.startswith("https://"):
+    if kind == "anthropic" and base_url and not base_url.startswith("https://"):
         raise LLMError("Claude API base URL must use https.")
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """urllib copies the Authorization header onto a redirect, even to another host: never follow one."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url, code, f"redirected to {newurl}; not following it with the key",
+                                     headers, fp)
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
 
 
 def complete(p: Provider, system: str, messages: list[dict]) -> dict:
@@ -260,7 +281,7 @@ def _openai_compat(p: Provider, system: str, messages: list[dict]) -> dict:
     url = p.base_url.rstrip("/") + "/chat/completions"
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as resp:
+        with _opener.open(request, timeout=TIMEOUT_SECONDS) as resp:
             data = json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         detail = _error_message(exc.read().decode("utf-8", "replace"))
@@ -285,8 +306,25 @@ def _openai_compat(p: Provider, system: str, messages: list[dict]) -> dict:
 MAX_LISTED_MODELS = 500
 
 
-def list_models(kind: str, base_url: str, key: str | None) -> list[str]:
-    """The provider's own model list, for the Model suggestions. Claude login has none (fixed aliases)."""
+KEY_RE = re.compile(r"[\x21-\x7e]{1,500}")  # printable ASCII, no spaces: what an API key looks like
+
+
+def _clean_ids(raw_ids, *, keep_order: bool) -> dict:
+    ids = list(dict.fromkeys(i for i in raw_ids if isinstance(i, str) and MODEL_RE.fullmatch(i)))
+    if not keep_order:
+        ids.sort()
+    return {"models": ids[:MAX_LISTED_MODELS], "total": len(ids)}
+
+
+def list_models(kind: str, base_url: str, key: str | None) -> dict:
+    """The provider's own model list, for the Model suggestions: {"models": [...], "total": n}.
+
+    Claude login has none (fixed aliases). The same URL rules as saving apply, so a key never
+    travels over plain http to the internet, and no redirect is followed with it.
+    """
+    if key is not None and not KEY_RE.fullmatch(key):
+        raise LLMError("That API key has spaces or unusual characters; paste it again.")
+    check_base_url(kind, base_url)
     if kind == "anthropic":
         import anthropic
 
@@ -294,44 +332,44 @@ def list_models(kind: str, base_url: str, key: str | None) -> list[str]:
             raise LLMError("Enter the API key first; the Claude API lists models only for a key.")
         client = anthropic.Anthropic(api_key=key, base_url=base_url or None, timeout=15, max_retries=0)
         try:
-            ids = [m.id for _, m in zip(range(MAX_LISTED_MODELS), client.models.list())]
+            raw_ids = [getattr(m, "id", None) for _, m in zip(range(MAX_LISTED_MODELS * 2), client.models.list())]
         except anthropic.AuthenticationError:
             raise LLMError("The Claude API rejected the key.") from None
         except anthropic.APIStatusError as exc:
-            raise LLMError(f"Claude API error {exc.status_code}: {exc.message}") from None
+            raise LLMError(f"Claude API error {exc.status_code}: {str(exc.message)[:300]}") from None
         except anthropic.APIConnectionError:
             raise LLMError("Could not reach the Claude API (network).") from None
-        return ids  # newest first, as the API returns them
+        except anthropic.APIError:
+            raise LLMError("The Claude API sent a model list this app could not read.") from None
+        return _clean_ids(raw_ids, keep_order=True)  # newest first, as the API returns them
     if kind != "openai_compat":
         raise LLMError("Claude login has no model list; use one of the names in the explainer.")
-    url = urllib.parse.urlparse(base_url)
-    if url.scheme not in ("http", "https") or not url.hostname:
-        raise LLMError("Enter the provider's base URL first, e.g. https://api.openai.com/v1")
     headers = {"User-Agent": "moneylyzer", "Accept": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
     request = urllib.request.Request(base_url.rstrip("/") + "/models", headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=15) as resp:
+        with _opener.open(request, timeout=15) as resp:
             raw = resp.read(2_000_001)
         if len(raw) > 2_000_000:
             raise LLMError("The provider's model list is too large to show.")
         data = json.loads(raw.decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
+        if 300 <= exc.code < 400:
+            raise LLMError(f"The provider redirected the request ({exc.code}); check the base URL.") from None
         detail = _error_message(exc.read(20_000).decode("utf-8", "replace"))
         if exc.code in (401, 403):
             raise LLMError(f"The provider refused to list models without a valid API key ({exc.code}): {detail}") from None
         raise LLMError(f"The provider did not list its models ({exc.code}): {detail}") from None
     except urllib.error.URLError as exc:
         raise LLMError(f"Could not reach {base_url}: {exc.reason}.") from None
-    except (TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise LLMError(f"Bad or slow response from {base_url}: {exc}") from None
+    except (OSError, http.client.HTTPException, ValueError) as exc:
+        # timeouts, dropped connections, not an HTTP server, bad JSON; the message never echoes headers
+        raise LLMError(f"Bad or slow response from {base_url} ({type(exc).__name__}).") from None
     items = data.get("data") if isinstance(data, dict) else None
     if not isinstance(items, list):
         raise LLMError("Unexpected response shape (expected a data list of models).")
-    ids = sorted({str(m["id"]) for m in items if isinstance(m, dict) and isinstance(m.get("id"), str)
-                  and MODEL_RE.fullmatch(m["id"])})
-    return ids[:MAX_LISTED_MODELS]
+    return _clean_ids((m.get("id") for m in items if isinstance(m, dict)), keep_order=False)
 
 
 def _error_message(raw: str) -> str:

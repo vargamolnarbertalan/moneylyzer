@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent } from "react";
+import { useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { endpoints, errorMessage, type DataLevel, type Effort, type Preset, type Provider, type ProviderInput, type ProviderKind } from "../../api";
 import { Alert } from "../Alert";
 import { Link } from "../../router";
@@ -20,7 +20,7 @@ const EFFORT_LABEL: Record<Effort, string> = {
   max: "max",
 };
 const EFFORT_HELP =
-  "How long Claude thinks before answering. Higher is slower and uses more of your plan or API budget. Model default leaves it to the model (medium on current Claude models in Claude login).";
+  "How long Claude thinks before answering. Higher is slower and uses more of your plan or API budget. Model default sends no setting and leaves it to the model (usually medium on current Claude models).";
 // Claude Code's own aliases (code.claude.com/docs/en/model-config, checked 2026-11-25); each follows the newest version.
 const CLAUDE_ALIASES = ["opus", "sonnet", "haiku", "fable"];
 const MODEL_HELP: Record<ProviderKind, string> = {
@@ -114,12 +114,25 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
     setEffort("high");
     setLevel("relative");
     setError(null);
+    forgetList();
+  };
+
+  // Each request gets a number; an answer for an older one (the URL or provider changed meanwhile) is dropped.
+  const listRequest = useRef(0);
+  const forgetList = () => {
+    listRequest.current += 1;
     setListed(null);
     setListNote(null);
+    setListing(false);
+  };
+  const changeUrl = (value: string) => {
+    setBaseUrl(value);
+    forgetList();
   };
 
   const listModels = async () => {
     if (kind === "claude_code") return;
+    const request = ++listRequest.current;
     setListing(true);
     setListNote(null);
     try {
@@ -129,16 +142,23 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
         ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
         ...(provider && !clearKey ? { provider_id: provider.id } : {}),
       });
+      if (request !== listRequest.current) return;
       setListed(res.models);
+      const shown = res.models.length;
       setListNote(
-        res.models.length
-          ? { ok: true, text: `${res.models.length} models found. Pick one from the Model field's suggestions, or type a name.` }
-          : { ok: false, text: "The provider listed no models." },
+        shown === 0
+          ? { ok: false, text: "The provider listed no models." }
+          : {
+              ok: true,
+              text:
+                (res.total > shown ? `${res.total} models found; the first ${shown} are suggested.` : `${shown} models found.`) +
+                " Pick one from the Model field's suggestions, or type a name.",
+            },
       );
     } catch (err) {
-      setListNote({ ok: false, text: errorMessage(err) });
+      if (request === listRequest.current) setListNote({ ok: false, text: errorMessage(err) });
     } finally {
-      setListing(false);
+      if (request === listRequest.current) setListing(false);
     }
   };
 
@@ -231,21 +251,21 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
         {kind === "openai_compat" && (
           <div className="field wide">
             <label htmlFor={id("url")}>Base URL</label>
-            <input id={id("url")} value={baseUrl} onChange={(e) => { setBaseUrl(e.target.value); setListed(null); setListNote(null); }} autoComplete="off" spellCheck={false} placeholder="https://api.example.com/v1" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
+            <input id={id("url")} value={baseUrl} onChange={(e) => changeUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://api.example.com/v1" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
             {errorText("base_url")}
           </div>
         )}
         {kind === "anthropic" && (
           <div className="field wide">
             <label className="check">
-              <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} /> Advanced: use a custom base URL
+              <input type="checkbox" checked={advanced} onChange={(e) => { setAdvanced(e.target.checked); forgetList(); }} /> Advanced: use a custom base URL
             </label>
             {advanced && (
               <>
                 <label className="sr-only" htmlFor={id("url")}>
                   Base URL
                 </label>
-                <input id={id("url")} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://…" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
+                <input id={id("url")} value={baseUrl} onChange={(e) => changeUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://…" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
                 {errorText("base_url")}
               </>
             )}
