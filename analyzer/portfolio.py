@@ -88,7 +88,7 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
 
         pos = summarize_position(item, item_lots, price, price_currency, fx_now, book.rate, base)
         today_base = today_pct = None
-        if (pos["value_base"] is not None and prev and price
+        if (not pos["closed"] and pos["value_base"] is not None and prev and price
                 and not currency_mismatch(currency, price_currency, item.get("price_divisor"))):
             today_pct = price / prev - 1
             today_base = pos["value_base"] - pos["value_base"] / (1 + today_pct)
@@ -102,13 +102,18 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
             "as_of": as_of, "prev_close": prev, "quantity": pos["quantity"], "avg_cost": pos["avg_cost"],
             "value": pos["value"], "value_base": pos["value_base"], "cost_base": pos["cost_base"],
             "pnl": pos["pnl"], "pnl_base": pos["pnl_base"], "pnl_pct": pos["pnl_pct"],
-            "today_base": today_base, "today_pct": today_pct, "lots": len(item_lots), "spark": closes, "check": check,
+            "today_base": today_base, "today_pct": today_pct, "lots": len(item_lots), "sells": pos["sells"],
+            "realized_base": pos["realized_base"], "closed": pos["closed"], "spark": closes, "check": check,
         })
 
-    valued = [r for r in rows if r["value_base"] is not None]
+    # A closed holding (everything sold) is worth 0 and is no part of the allocation or the counts below;
+    # only its realized P/L still counts.
+    held = [r for r in rows if not r["closed"]]
+    valued = [r for r in held if r["value_base"] is not None]
     total = sum(r["value_base"] for r in valued)
     for r in rows:
-        r["weight"] = r["value_base"] / total if r["value_base"] is not None and total else None
+        r["weight"] = (r["value_base"] / total
+                       if not r["closed"] and r["value_base"] is not None and total else None)
     with_pnl = [r for r in valued if r["pnl_base"] is not None]
     cost = sum(r["cost_base"] for r in with_pnl)
     with_today = [r for r in valued if r["today_base"] is not None]
@@ -123,7 +128,11 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
             "pnl_pct": (sum(r["pnl_base"] for r in with_pnl) / cost) if cost else None,
             "today_base": today if with_today else None,
             "today_pct": (today / yesterday) if yesterday else None,
-            "holdings": len(rows), "valued": len(valued), "with_pnl": len(with_pnl), "with_today": len(with_today),
+            # unknown (None) as soon as one holding's is: a partial sum would pass for the whole
+            "realized_base": (None if any(r["realized_base"] is None for r in rows)
+                              else sum(r["realized_base"] for r in rows)),
+            "holdings": len(held), "closed": len(rows) - len(held), "valued": len(valued),
+            "with_pnl": len(with_pnl), "with_today": len(with_today),
         },
         "fx": fx_now,
     }
@@ -137,7 +146,7 @@ def _today() -> pd.Timestamp:
 def value_history(days: int | None, base: str = "HUF") -> dict:
     """Daily portfolio value in the base currency, rebuilt from stored closes x quantity held x stored FX.
 
-    Quantity on a date comes from purchases bought on or before it; holdings without purchases use
+    Quantity on a date comes from the transactions dated on or before it (buys add, sales subtract); holdings without transactions use
     their current quantity throughout (stated in the UI). A holding counts from its first stored
     price on (its last earlier price is carried into short windows), so the curve starts when data starts.
     """
@@ -178,9 +187,11 @@ def value_history(days: int | None, base: str = "HUF") -> dict:
         idx = close.index.union(pd.DatetimeIndex([end] if start is None else [start, end]))
         item_lots = lots[lots["instrument_id"] == item["instrument_id"]]
         if not item_lots.empty:
-            bought = item_lots.assign(d=pd.to_datetime(item_lots["buy_date"])).groupby("d")["quantity"].sum().cumsum()
-            idx = idx.union(bought.index[bought.index <= end])  # a purchase after the last price counts from its date
-            qty = bought.reindex(idx).ffill().fillna(0.0)
+            # sales count negative; never below zero (a sale larger than the units held then, e.g. an old import)
+            signed = item_lots["quantity"].where(item_lots["side"] != "sell", -item_lots["quantity"])
+            held = item_lots.assign(d=pd.to_datetime(item_lots["buy_date"]), signed=signed).groupby("d")["signed"].sum().cumsum().clip(lower=0.0)
+            idx = idx.union(held.index[held.index <= end])  # a transaction after the last price counts from its date
+            qty = held.reindex(idx).ffill().fillna(0.0)
         else:
             qty = pd.Series(float(item.get("quantity") or 0.0), index=idx)
         close = close.reindex(idx).ffill()  # last known close carried over non-trading days, up to today

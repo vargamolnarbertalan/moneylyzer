@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { endpoints, errorMessage } from "../api";
-import { COMMON_CURRENCIES } from "../currencies";
+import { COMMON_CURRENCIES, withFirst } from "../currencies";
 import { useResource } from "../hooks";
 import { useBase } from "../live";
 import { Select } from "./Select";
@@ -20,7 +20,7 @@ export function CurrencySwitcher({ showLabel = false }: { showLabel?: boolean })
   const pickedOther = useRef(false);
 
   const list = settings.data?.currencies?.length ? settings.data.currencies : COMMON_CURRENCIES;
-  const options = list.includes(base) ? list : [base, ...list];
+  const options = withFirst([base], list); // the reporting currency first, then the neutral order
 
   // The change is done when a snapshot in the new currency arrives; give up waiting after a while.
   useEffect(() => {

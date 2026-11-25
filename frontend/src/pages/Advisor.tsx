@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type K
 import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
 import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
-import { ApiError, FULL_DETAIL_ITEMS, endpoints, errorMessage, type Provider } from "../api";
+import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Provider } from "../api";
 import { Alert } from "../components/Alert";
 import { Card } from "../components/Card";
 import { Select } from "../components/Select";
@@ -248,7 +248,7 @@ export function AdvisorPage() {
           {empty && !waiting && (
             <div className="empty">
               <b>Ask about your portfolio, a holding or the markets</b>
-              The AI analyst sees your holdings (weights and % changes, unless you turned on full detail for the model), market benchmarks and recent news. Pick a quick question or type your own.
+              The AI analyst sees your holdings ({RELATIVE_ITEMS}, unless you turned on full detail for the model), market benchmarks and recent news. Pick a quick question or type your own.
             </div>
           )}
           {chat.messages.map((m) => (m.role === "user" ? <div key={m.id} className="msg user"><p>{m.content}</p></div> : <Answer key={m.id} m={m} />))}
@@ -335,7 +335,7 @@ function Answer({ m }: { m: ChatMessage }) {
         <details className="shared">
           <summary>What was shared</summary>
           <ul className="plain-list">
-            <li>{shared.data_level === "full" ? `Full detail (${FULL_DETAIL_ITEMS})` : "Relative figures only (weights and % changes)"}</li>
+            <li>{shared.data_level === "full" ? `Full detail (${FULL_DETAIL_ITEMS})` : `Relative figures only (${RELATIVE_ITEMS})`}</li>
             <li>
               {shared.holdings} {shared.holdings === 1 ? "holding" : "holdings"} · {shared.benchmarks} market {shared.benchmarks === 1 ? "benchmark" : "benchmarks"} · {shared.news_items} news {shared.news_items === 1 ? "item" : "items"}
             </li>

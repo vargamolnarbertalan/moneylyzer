@@ -36,9 +36,14 @@ export const QUICK_PROMPTS: readonly QuickPrompt[] = [
       "Daily briefing: what moved in my portfolio today and why, which news items matter for my holdings and which are noise, and what, if anything, deserves my attention. Keep it short.",
   },
   {
+    label: "Monthly check-up",
+    question:
+      "Give me a monthly check-up of my portfolio in these sections, in this order: Summary (three lines); What changed this month (holdings, markets, news); Rules and preferences (each standing rule and preference: met, drifting or broken, with the figure that shows it); Risks to watch; Data gaps (anything missing, stale or unpriced, or \"none\"). Finish with Recommendations if direct recommendations are enabled for me, otherwise with Options.",
+  },
+  {
     label: "Diversification score",
     question:
-      "Score my diversification from 0 to 100 and show the working: (1) concentration: the Herfindahl index (the sum of squared weights) and the effective number of holdings (1 divided by it); (2) the combined weight of my top 3 holdings; (3) how spread my currencies are; (4) the share of all holding pairs (n × (n − 1) / 2) correlated above 0.7, where pairs not listed are weaker than the weakest listed. For each part give the formula, its sub-score and its weight in the total. Then give the total, the three biggest drivers and, in general terms, what would raise the score, without naming instruments to buy or sell. Where sector or region data is not supplied, say so instead of guessing.",
+      "Score my diversification from 0 to 100 and show the working: (1) concentration: the Herfindahl index (the sum of squared weights) and the effective number of holdings (1 divided by it); (2) the combined weight of my top 3 holdings; (3) how spread my currencies are; (4) the share of all holding pairs (n × (n − 1) / 2) correlated above 0.7, where pairs not listed are weaker than the weakest listed. For each part give the formula, its sub-score and its weight in the total. Then give the total, the three biggest drivers and what would raise the score most. Where sector or region data is not supplied, say so instead of guessing.",
   },
   {
     label: "SWOT analysis",
@@ -58,7 +63,7 @@ export const QUICK_PROMPTS: readonly QuickPrompt[] = [
   {
     label: "Platforms & fees",
     question:
-      "Review where I hold my investments and what that costs me. Compare the platforms in my purchases with the two or three strongest alternatives available in my country on commissions, currency conversion, custody and account fees, plans, investor protection and product range, checked live with sources and dates. Then set out my options (keep as is, consolidate or split) with the cost, risk and effort of each, and whether buying government securities directly from the state is better, in general terms, without naming securities to buy. If you cannot see my platforms or my country, ask me where I hold my investments and where I live; never ask for amounts.",
+      "Review where I hold my investments and what that costs me. Compare the platforms in my purchases with the two or three strongest alternatives available in my country on commissions, currency conversion, custody and account fees, plans, investor protection and product range, checked live with sources and dates. Then set out my options (keep as is, consolidate or split) with the cost, risk and effort of each, and whether buying government securities directly from the state is better. If you cannot see my platforms or my country, ask me where I hold my investments and where I live; never ask for amounts.",
   },
   {
     label: "Stress test",
@@ -68,12 +73,12 @@ export const QUICK_PROMPTS: readonly QuickPrompt[] = [
   {
     label: "Five perspectives",
     question:
-      "Review my portfolio from five perspectives, a short paragraph each: a cautious investor close to retirement, a long-term growth investor, a macro strategist, a planner focused on costs and taxes, and a sceptic looking for what could go badly wrong. Then say where they agree and where they disagree. Keep it in general terms, without naming instruments to buy or sell.",
+      "Review my portfolio from five perspectives, a short paragraph each: a cautious investor close to retirement, a long-term growth investor, a macro strategist, a planner focused on costs and taxes, and a sceptic looking for what could go badly wrong. Then say where they agree and where they disagree.",
   },
   {
     label: "Rules & drift check",
     question:
-      "Check my portfolio against my standing rules, my preferences and my notes, and list every breach, and any drift from targets they state, with its size. Then describe three ways to rebalance (new money only, partial, full) with the effect, costs and tax points of each in general terms, without naming instruments to buy or sell.",
+      "Check my portfolio against my standing rules, my preferences and my notes, and list every breach, and any drift from targets they state, with its size. Then describe three ways to rebalance (new money only, partial, full) with the effect, costs and tax points (in general terms) of each.",
   },
   {
     label: "Buying habits",

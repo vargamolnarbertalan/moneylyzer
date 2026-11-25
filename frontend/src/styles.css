@@ -690,6 +690,25 @@ code {
   gap: var(--gap);
   margin-bottom: var(--gap);
 }
+/* A holding with sales has a fifth stat (Realized P/L): three cards over two. */
+.stats.five {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.stats.five > .card {
+  grid-column: span 3;
+}
+.stats.five > .card:nth-child(-n + 3) {
+  grid-column: span 2;
+}
+/* The Overview hero gains a fourth card (Realized P/L) once any holding has sales. */
+.hero.four {
+  grid-template-columns: 1.3fr 1fr 1fr 1fr;
+}
+@media (max-width: 1280px) {
+  .hero.four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 .cols2 {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1490,6 +1509,21 @@ a.chip-link:hover {
 .id-chip:hover {
   background: color-mix(in srgb, var(--accent) 28%, transparent);
 }
+/* Holdings: the whole row opens the holding (the name's stretched .row-link); Edit and Delete sit above
+   that overlay so they keep working on their own. */
+.dt-hold .dt tbody tr:not(.dt-extra):not(.dt-empty) {
+  position: relative;
+}
+.dt-hold .dt tbody tr:not(.dt-extra):not(.dt-empty):hover {
+  background: var(--chip);
+}
+.dt-hold .dt tbody tr:hover .name-link {
+  color: var(--accent);
+}
+.dt-hold .acts-in {
+  position: relative;
+  z-index: 1;
+}
 .btn svg {
   width: 16px;
   height: 16px;
@@ -1847,11 +1881,9 @@ input:-webkit-autofill {
   align-items: center;
   gap: 8px;
 }
-.ai .who i {
+.ai .who .ai-mark {
   width: 22px;
   height: 22px;
-  border-radius: 7px;
-  background: var(--grad);
   flex: none;
 }
 .ai .ai-actions {
@@ -2905,6 +2937,19 @@ a.news-card:hover {
   }
   .stats {
     grid-template-columns: 1fr 1fr;
+  }
+  .stats.five {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stats.five > .card,
+  .stats.five > .card:nth-child(-n + 3) {
+    grid-column: auto;
+  }
+  .stats.five > .card:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+  .hero.four .today {
+    grid-column: 1 / -1;
   }
   .stats .mid {
     font-size: 18px;

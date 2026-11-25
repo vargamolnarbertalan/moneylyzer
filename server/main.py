@@ -22,8 +22,8 @@ from pydantic import BaseModel, Field, field_validator
 
 from analyzer import advisor, db, llm, prefs, research
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
-from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency
-from analyzer.portfolio import value_history
+from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
+from analyzer.portfolio import RateBook, value_history
 from analyzer.market import CURRENCY_RE, download_fund_nav, fund_isin, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
@@ -162,6 +162,8 @@ class Credentials(BaseModel):
 
 class SetupBody(Credentials):
     code: str = Field(min_length=1, max_length=32)
+    # a new install's reporting currency, from the browser's region; ignored unless it is a listed one
+    base_currency: str | None = Field(default=None, max_length=3)
 
 
 class PasswordChange(BaseModel):
@@ -203,6 +205,9 @@ def auth_state(request: Request):
 @app.post("/api/auth/setup", dependencies=[Depends(auth.require_csrf)])
 def auth_setup(body: SetupBody, request: Request, response: Response):
     auth.setup(body.username, body.password, body.code)
+    code = (body.base_currency or "").strip().upper()
+    if code in COMMON_CURRENCIES and db.get_setting("base_currency") is None:
+        db.set_setting("base_currency", code)
     _set_cookie(response, auth.login(body.username, body.password, auth.client_ip(request)))
     return {"user": body.username.strip()}
 
@@ -317,8 +322,10 @@ async def stream(request: Request, user: str = Depends(auth.require_user)):
 
 
 # ---------------------------------------------------------------- settings (reporting currency)
-COMMON_CURRENCIES = ["HUF", "EUR", "USD", "GBP", "CHF", "PLN", "CZK", "RON", "SEK", "NOK", "DKK", "JPY", "CNY",
-                     "AUD", "CAD"]
+# Neutral order (widely used first); the reporting currency goes first wherever a list is shown.
+# Keep in step with frontend/src/currencies.ts.
+COMMON_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF",
+                     "RON"]
 
 
 class AppSettingsBody(BaseModel):
@@ -400,7 +407,7 @@ async def instrument_save(body: InstrumentBody, create: bool = False, update: bo
         # Purchases are stored in the holding's currency and price convention; changing either would
         # silently reinterpret every purchase.
         if old["currency"] != row["currency"] or float(old["price_divisor"]) != float(row["price_divisor"]):
-            raise HTTPException(409, "This holding has purchases: its currency and price divisor cannot change.")
+            raise HTTPException(409, "This holding has transactions: its currency and price divisor cannot change.")
     db.upsert_instrument(row)
     await hub.recompute()
     return {"ok": True}
@@ -411,7 +418,7 @@ async def instrument_delete(instrument_id: str, confirm_purchases: int = Query(0
                             user: str = Depends(auth.require_user)):
     lots = db.count_lots(instrument_id)
     if lots != confirm_purchases:
-        raise HTTPException(409, f"This also deletes {lots} purchase(s) and all stored prices. Confirm with confirm_purchases={lots}.")
+        raise HTTPException(409, f"This also deletes {lots} transaction(s) and all stored prices. Confirm with confirm_purchases={lots}.")
     db.delete_instrument(instrument_id)
     await hub.recompute()
     return {"ok": True}
@@ -429,15 +436,22 @@ async def instrument_detail(instrument_id: str, user: str = Depends(auth.require
     scenarios = [] if item["asset_type"] == "government_bond" else bootstrap_scenarios(instrument_id, history)
     row = next((r for r in (hub.snapshot or {}).get("rows", []) if r["id"] == instrument_id), None)
     prices = [{"date": d.date().isoformat(), "close": float(c)} for d, c in zip(history["date"], history["close"])]
+    lots = db.get_lots(instrument_id).to_dict("records")
+    base = db.base_currency()
+    # realized P/L of each sale (base currency; null when something it needs is unknown), for the transactions table
+    realized = realized_by_sale(item, lots, RateBook(base).rate, base)
+    for lot in lots:
+        lot["realized_base"] = realized.get(lot["lot_id"])
     return jsonable({
         "instrument": item, "position": row, "metrics": metrics, "scenarios": scenarios, "prices": prices,
-        "price_currency": latest_price_currency(history), "lots": db.get_lots(instrument_id).to_dict("records"),
+        "price_currency": latest_price_currency(history), "lots": lots,
     })
 
 
-# ---------------------------------------------------------------- purchases
+# ---------------------------------------------------------------- transactions (buys and sells; stored in `lots`)
 class LotBody(BaseModel):
     instrument_id: str = Field(min_length=1, max_length=64)
+    side: Literal["buy", "sell"] = "buy"
     buy_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     quantity: float = Field(gt=0)
     unit_price: float = Field(default=0, ge=0)
@@ -461,9 +475,12 @@ async def lot_add(body: LotBody, user: str = Depends(auth.require_user)):
         rows = validate_lots(frame, set(db.get_instruments()["instrument_id"].astype(str)), db.base_currency())
     except ValueError as exc:
         raise HTTPException(400, str(exc).removeprefix("CSV line 2: ")) from None
-    added, skipped = db.add_lots(rows)
+    try:
+        added, skipped = db.add_lots(rows)
+    except db.SaleTooLarge as exc:
+        raise HTTPException(400, str(exc)) from None
     if skipped:
-        raise HTTPException(409, "An identical purchase is already recorded.")
+        raise HTTPException(409, "An identical transaction is already recorded.")
     await hub.recompute()
     return {"ok": True}
 
@@ -521,8 +538,11 @@ async def quote(symbol: str = Query(min_length=1, max_length=64), user: str = De
 async def lot_delete(lot_id: int, instrument_id: str = Query(...), user: str = Depends(auth.require_user)):
     found = db.get_lots(instrument_id)
     if lot_id not in set(found["lot_id"].astype(int)):
-        raise HTTPException(404, "That purchase does not belong to this holding (it may have been deleted already).")
-    db.delete_lot(lot_id)
+        raise HTTPException(404, "That transaction does not belong to this holding (it may have been deleted already).")
+    try:
+        db.delete_lot(lot_id)
+    except db.LotInUse as exc:
+        raise HTTPException(409, str(exc)) from None
     await hub.recompute()
     return {"ok": True}
 
@@ -561,7 +581,10 @@ async def import_lots(file: UploadFile = File(...), user: str = Depends(auth.req
         rows = validate_lots(frame, set(db.get_instruments()["instrument_id"].astype(str)), db.base_currency())
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
-    added, skipped = db.add_lots(rows)
+    try:
+        added, skipped = db.add_lots(rows)
+    except db.SaleTooLarge as exc:  # nothing was stored; `row` indexes the file's data lines (line 1 is the header)
+        raise HTTPException(400, f"CSV line {exc.row + 2}: {exc}") from None
     await hub.recompute()
     return {"added": added, "skipped_duplicates": skipped}
 
@@ -705,7 +728,7 @@ def ai_provider_delete(provider_id: str, user: str = Depends(auth.require_user))
 
 class DataLevelBody(BaseModel):
     data_level: Literal["relative", "full"]
-    # "full" sends amounts, quantities, costs, purchase dates, platforms and holding notes: the client must confirm it
+    # "full" sends amounts, quantities, costs, realized P/L, purchase and sale dates, platforms and holding notes: the client must confirm it
     confirm_full: bool = False
 
 

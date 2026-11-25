@@ -302,6 +302,19 @@ class ApiTests(unittest.TestCase):
         self.assertIn("Start a new conversation", r.json()["detail"])
         sent.assert_not_called()
 
+    def test_setup_takes_the_browser_currency_once(self):
+        r = self.client.post("/api/auth/setup", headers=H, json={"username": "owner", "password": "correct horse 1",
+                                                                 "code": auth._setup_code, "base_currency": "eur"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(db.base_currency(), "EUR")
+        self.assertEqual(self.client.get("/api/settings", headers=H).json()["currencies"][0], "EUR")
+
+    def test_setup_ignores_an_unlisted_currency(self):
+        r = self.client.post("/api/auth/setup", headers=H, json={"username": "owner", "password": "correct horse 1",
+                                                                 "code": auth._setup_code, "base_currency": "XYZ"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(db.base_currency(), "HUF")  # unchanged default
+
     def test_edit_form_never_recreates_a_deleted_holding(self):
         self.setup_account()
         body = {"instrument_id": "GONE", "name": "Gone", "asset_type": "etf", "quantity": 1, "currency": "EUR"}
@@ -394,6 +407,102 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 409)  # currency locked once purchases exist
         self.assertEqual(self.client.delete("/api/instruments/A", headers=H).status_code, 409)
         self.assertEqual(self.client.delete("/api/instruments/A?confirm_purchases=1", headers=H).status_code, 200)
+
+    def test_sales_cannot_exceed_the_units_held_and_a_buy_in_use_stays(self):
+        self.setup_account()
+        body = {"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0, "currency": "EUR"}
+        self.client.post("/api/instruments", json=body, headers=H).raise_for_status()
+        trade = {"instrument_id": "A", "quantity": 3, "unit_price": 5}
+        self.assertEqual(self.client.post("/api/lots", json={**trade, "buy_date": "2025-01-02"}, headers=H).status_code, 200)
+        r = self.client.post("/api/lots", json={**trade, "side": "sell", "quantity": 4, "buy_date": "2025-04-03"}, headers=H)
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, "On 2025-04-03 you held 3 units; a sale can't be larger."))
+        r = self.client.post("/api/lots", json={**trade, "side": "sell", "quantity": 1, "buy_date": "2024-12-31"}, headers=H)
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, "On 2024-12-31 you held 0 units; a sale can't be larger."))
+        self.assertEqual(self.client.post("/api/lots", json={**trade, "side": "sideways", "buy_date": "2025-04-03"}, headers=H).status_code, 422)
+        sale = {**trade, "side": "sell", "quantity": 2, "unit_price": 8, "buy_date": "2025-04-03"}
+        self.assertEqual(self.client.post("/api/lots", json=sale, headers=H).status_code, 200)
+        self.assertEqual(self.client.post("/api/lots", json=sale, headers=H).status_code, 409)     # the same sale twice
+        r = self.client.post("/api/lots", json={**trade, "side": "sell", "quantity": 2, "buy_date": "2025-02-01"}, headers=H)
+        self.assertEqual(r.status_code, 400)                                                       # would starve the April sale
+        self.assertIn("your sale on 2025-04-03", r.json()["detail"])
+
+        lots = {l["side"]: l["lot_id"] for l in self.client.get("/api/lots").json()}
+        r = self.client.delete(f"/api/lots/{lots['buy']}?instrument_id=A", headers=H)
+        self.assertEqual((r.status_code, r.json()["detail"]), (409, "A later sale uses these units. Delete the sale first."))
+        self.assertEqual(self.client.delete(f"/api/lots/{lots['sell']}?instrument_id=A", headers=H).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/lots/{lots['buy']}?instrument_id=A", headers=H).status_code, 200)
+
+    def test_csv_sales_are_refused_with_the_line_number(self):
+        self.setup_account()
+        body = {"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0, "currency": "EUR"}
+        self.client.post("/api/instruments", json=body, headers=H).raise_for_status()
+
+        def upload(text):
+            return self.client.post("/api/import/lots", files={"file": ("l.csv", io.BytesIO(text.encode()), "text/csv")}, headers=H)
+        head = "instrument_id,buy_date,side,quantity,unit_price\n"
+        r = upload(head + "A,2025-01-02,buy,3,5\nA,2025-04-03,SELL,2,6\nA,2025-05-01,sell,5,6\n")
+        self.assertEqual((r.status_code, r.json()["detail"]),
+                         (400, "CSV line 4: On 2025-05-01 you held 1 unit; a sale can't be larger."))
+        self.assertEqual(self.client.get("/api/lots").json(), [])                                  # all or nothing
+        r = upload(head + "A,2025-01-02,hold,3,5\n")
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, "CSV line 2: side must be buy or sell (empty means buy)"))
+        good = head + "A,2025-01-02,,3,5\nA,2025-04-03,Sell,2,6\n"                                 # empty side = buy
+        self.assertEqual(upload(good).json(), {"added": 2, "skipped_duplicates": 0})
+        self.assertEqual(upload(good).json(), {"added": 0, "skipped_duplicates": 2})                # a re-import is no oversale
+        self.assertTrue(self.client.get("/api/templates/lots.csv").text.startswith("instrument_id,buy_date,side,quantity,"))
+
+    def test_sales_show_realized_pl_per_sale_per_holding_and_in_the_totals(self):
+        self.setup_account()
+        body = {"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0, "currency": "EUR"}
+        self.client.post("/api/instruments", json=body, headers=H).raise_for_status()
+        trade = {"instrument_id": "A", "unit_price": 5}
+        self.client.post("/api/lots", json={**trade, "quantity": 3, "buy_date": "2025-01-02"}, headers=H).raise_for_status()
+        self.client.post("/api/lots", json={**trade, "side": "sell", "quantity": 2, "unit_price": 8, "buy_date": "2025-04-03"}, headers=H).raise_for_status()
+        self.client.put("/api/settings", json={"base_currency": "HUF"}, headers=H).raise_for_status()  # fetches the FX history
+        snap = self.client.get("/api/portfolio").json()
+        eur_huf = 340.0 / 0.85                                                  # buy-date and sale-date FX are both this flat rate
+        row = snap["rows"][0]
+        self.assertEqual((row["quantity"], row["sells"], row["closed"]), (1, 1, False))
+        self.assertAlmostEqual(row["realized_base"], 2 * (8 - 5) * eur_huf)
+        self.assertAlmostEqual(snap["totals"]["realized_base"], row["realized_base"])
+        lots = {l["side"]: l for l in self.client.get("/api/instruments/A").json()["lots"]}
+        self.assertAlmostEqual(lots["sell"]["realized_base"], row["realized_base"])
+        self.assertIsNone(lots["buy"]["realized_base"])
+        self.client.post("/api/lots", json={**trade, "side": "sell", "quantity": 1, "buy_date": "2025-05-02"}, headers=H).raise_for_status()
+        closed = self.client.get("/api/portfolio").json()["rows"][0]                # the last unit sold
+        self.assertEqual((closed["closed"], closed["weight"], closed["value_base"]), (True, None, 0.0))
+
+    def test_record_only_holdings_and_csv_files_in_any_order(self):
+        self.setup_account()
+        record = "This holding's units come from its holding record. Record its purchases first, then the sale."
+        self.client.post("/api/instruments", json={"instrument_id": "R", "name": "R", "asset_type": "stock", "quantity": 10,
+                                                   "avg_cost": 100, "currency": "EUR"}, headers=H).raise_for_status()
+        sale = {"instrument_id": "R", "side": "sell", "buy_date": "2025-04-03", "quantity": 4, "unit_price": 8}
+        r = self.client.post("/api/lots", json=sale, headers=H)
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, record))     # the page shows 10 units, not 0
+
+        def upload(text):
+            return self.client.post("/api/import/lots", files={"file": ("l.csv", io.BytesIO(text.encode()), "text/csv")}, headers=H)
+        head = "instrument_id,buy_date,side,quantity,unit_price\n"
+        r = upload(head + "R,2025-01-02,buy,1,5\nR,2025-04-03,sell,1,8\nR,2025-04-04,buy,1,5\n")
+        self.assertEqual(r.status_code, 200, r.text)                              # a purchase in the file is enough
+        self.client.post("/api/instruments", json={"instrument_id": "S", "name": "S", "asset_type": "stock", "quantity": 10,
+                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        r = upload(head + "S,2025-01-02,sell,1,8\n")
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, "CSV line 2: " + record))
+
+        self.client.post("/api/instruments", json={"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0,
+                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        newest_first = head + "A,2025-03-01,sell,2,6\nA,2025-03-01,buy,2,5\n"    # the sale above the buy it sells
+        self.assertEqual(upload(newest_first).json(), {"added": 2, "skipped_duplicates": 0})
+        self.assertEqual(upload(newest_first).json(), {"added": 0, "skipped_duplicates": 2})
+        self.client.post("/api/instruments", json={"instrument_id": "B", "name": "B", "asset_type": "stock", "quantity": 0,
+                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        self.assertEqual(upload(head + "B,2025-01-02,buy,3,5\nB,2025-02-01,sell,2,6\n").status_code, 200)
+        # line 3 (not line 2) is the new sale that takes the units the stored February sale needs
+        r = upload(head + "B,2025-03-01,sell,1,6\nB,2025-01-15,sell,2,6\n")
+        self.assertEqual((r.status_code, r.json()["detail"]),
+                         (400, "CSV line 3: That would leave your sale on 2025-02-01 larger than the 1 unit you would hold then."))
 
     def test_zero_price_purchase_rejected(self):
         self.setup_account()

@@ -1,6 +1,6 @@
 # Not financial advice
 
-_Notice version 2026-11-24.1. The app shows this text once before first use and again whenever it
+_Notice version 2026-11-25.1. The app shows this text once before first use and again whenever it
 changes, and asks you to accept the liability paragraph expressly (source of truth:
 `frontend/src/legal.ts`; keep both in step)._
 
@@ -9,9 +9,9 @@ analysing your own investments. Its author does not provide it to you as a servi
 adviser, broker or bank.
 
 Nothing it shows — prices, values, profit and loss, signals, scenarios or news — is investment,
-financial, tax or legal advice from its author or contributors. AI-generated text comes from the AI
-model you choose to connect; it is unverified analysis, not a recommendation suitable for your
-situation.
+financial, tax or legal advice from its author or contributors. AI-generated text, including buy,
+sell or hold recommendations if you turn them on, comes from the AI model you choose to connect. It
+is unverified and is not a suitability assessment by a licensed adviser.
 
 Data can be delayed, incomplete or wrong, and AI models can misread data or state false things with
 confidence. Check anything that matters against the original sources and your broker.

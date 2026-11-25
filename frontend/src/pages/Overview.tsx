@@ -104,10 +104,11 @@ function ErrorStrip({ errors, onDismiss }: { errors: string[]; onDismiss: () => 
 function Hero({ snap }: { snap: Snapshot }) {
   const t = snap.totals;
   const base = snap.base_currency;
-  const currencies = new Set(snap.rows.map((r) => r.currency)).size;
+  const currencies = new Set(snap.rows.filter((r) => !r.closed).map((r) => r.currency)).size;
   const unvalued = t.holdings - t.valued;
+  const hasSales = snap.rows.some((r) => r.sells > 0); // only then is there a realized P/L to show
   return (
-    <div className="hero">
+    <div className={hasSales ? "hero four" : "hero"}>
       <Card className="total">
         <div className="k">Portfolio value</div>
         <div className="big">
@@ -128,6 +129,18 @@ function Hero({ snap }: { snap: Snapshot }) {
           {t.with_pnl < t.holdings && <> · {t.with_pnl} of {t.holdings} holdings</>}
         </div>
       </Card>
+      {hasSales && (
+        <Card className="realized">
+          <div className="k">Realized P/L</div>
+          <div className="mid">
+            <Tween tone={signClass} value={t.realized_base} format={(v) => signedMoney(v, base)} unit={base} />
+          </div>
+          <div className="sub">
+            <span className="keep">{isNum(t.realized_base) ? "on units you sold, oldest first" : "a sale is missing its price or a rate"}</span>
+            {t.closed > 0 && <> · {t.closed} closed</>}
+          </div>
+        </Card>
+      )}
       <Card className="today">
         <div className="k">Today</div>
         <div className="mid">
@@ -227,7 +240,7 @@ function ValueChart({ snap }: { snap: Snapshot }) {
           <Info aria-hidden="true" />
           How it's calculated
         </summary>
-        <p className="note">Rebuilt from stored daily prices × your purchases, converted at each day's rate; holdings without purchases use today's quantity.</p>
+        <p className="note">Rebuilt from stored daily prices × the units you held (your buys and sells), converted at each day's rate; holdings without transactions use today's quantity.</p>
       </details>
     </Card>
   );
@@ -264,7 +277,7 @@ function Allocation({ rows, total, base }: { rows: Row[]; total: number | null; 
     <Card as="section" className="alloc" aria-labelledby="alloc-h">
       <CardHeader id="alloc-h" title="Allocation" aside={<Segmented label="Allocation view" options={ALLOC_VIEWS} value={view} onChange={setView} />} />
       {valued.length === 0 ? (
-        <p className="sub">Nothing has a price yet.</p>
+        <p className="sub">{rows.length > 0 && rows.every((r) => r.closed) ? "No open holdings: everything has been sold." : "Nothing has a price yet."}</p>
       ) : view === "grid" ? (
         <>
           <Treemap rows={valued} />
@@ -391,8 +404,10 @@ function makeColumns(base: string): readonly Column<Row>[] {
   ];
 }
 
-function HoldingsList({ rows, base, flashes }: { rows: Row[]; base: string; flashes: Record<string, "up" | "down"> }) {
+function HoldingsList({ rows: all, base, flashes }: { rows: Row[]; base: string; flashes: Record<string, "up" | "down"> }) {
   const columns = useMemo(() => makeColumns(base), [base]);
+  // Closed holdings (everything sold) are not part of the portfolio: they live on the Holdings page.
+  const rows = useMemo(() => all.filter((r) => !r.closed), [all]);
   const sf = useSortFilter<Row>({
     id: "overview-holdings",
     rows,

@@ -67,20 +67,22 @@ def _validate_row(row: dict) -> dict:
     return row
 
 
-LOTS_HEADER = "instrument_id,buy_date,quantity,unit_price,paid_amount,paid_currency,platform,notes"
+LOTS_HEADER = "instrument_id,buy_date,side,quantity,unit_price,paid_amount,paid_currency,platform,notes"
 
 
 def validate_lots(frame: pd.DataFrame, known_ids: set[str], default_currency: str = "HUF") -> list[dict]:
-    """Purchases CSV: instrument_id, buy_date, quantity, unit_price; optional paid_amount, paid_currency, platform, notes.
+    """Transactions CSV: instrument_id, buy_date, quantity, unit_price; optional side, paid_amount, paid_currency, platform, notes.
 
-    paid_amount is what was actually paid, fees included, in paid_currency (default: the reporting currency).
-    A legacy `cost_huf` column is accepted as paid_amount in HUF.
+    side is buy or sell (any case; empty means buy), and buy_date is the trade date. paid_amount is what was
+    actually paid, fees included, for a buy, or what was received, net of fees, for a sell; in paid_currency
+    (default: the reporting currency). A legacy `cost_huf` column is accepted as paid_amount in HUF.
+    Whether a sale is larger than the units held then is checked when the rows are stored (db.add_lots).
     """
     required = {"instrument_id", "buy_date", "quantity", "unit_price"}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(
-            "Purchases CSV is missing columns: " + ", ".join(sorted(missing))
+            "Transactions CSV is missing columns: " + ", ".join(sorted(missing))
             + ". The first line must be: " + LOTS_HEADER
         )
     rows = []
@@ -88,6 +90,9 @@ def validate_lots(frame: pd.DataFrame, known_ids: set[str], default_currency: st
         instrument_id = _text(row.get("instrument_id"))
         if instrument_id not in known_ids:
             raise ValueError(f"CSV line {line}: unknown instrument_id '{instrument_id}'; import the holding first")
+        side = _text(row.get("side")).lower() or "buy"
+        if side not in ("buy", "sell"):
+            raise ValueError(f"CSV line {line}: side must be buy or sell (empty means buy)")
         date_text = _text(row.get("buy_date"))
         if not date_text:
             raise ValueError(f"CSV line {line}: buy_date is empty (use YYYY-MM-DD)")
@@ -111,13 +116,13 @@ def validate_lots(frame: pd.DataFrame, known_ids: set[str], default_currency: st
         if quantity <= 0 or unit_price < 0:
             raise ValueError(f"CSV line {line}: quantity must be > 0 and unit_price must not be negative")
         if unit_price == 0 and paid is None:
-            raise ValueError(f"CSV line {line}: give unit_price or paid_amount (what you paid)")
+            raise ValueError(f"CSV line {line}: give unit_price or paid_amount (what you {'received' if side == 'sell' else 'paid'})")
         if buy_date > pd.Timestamp.today().date():
             raise ValueError(f"CSV line {line}: buy_date {buy_date} is in the future")
         notes, platform = _text(row.get("notes")), _text(row.get("platform"))
         if len(notes) > 500 or len(platform) > 60:
             raise ValueError(f"CSV line {line}: notes may be at most 500 and platform at most 60 characters")
-        rows.append({"instrument_id": instrument_id, "buy_date": buy_date.isoformat(), "quantity": quantity,
+        rows.append({"instrument_id": instrument_id, "buy_date": buy_date.isoformat(), "side": side, "quantity": quantity,
                      "unit_price": unit_price, "paid_amount": paid, "paid_currency": paid_ccy if paid is not None else None,
                      "notes": notes, "platform": platform or None})
     return rows

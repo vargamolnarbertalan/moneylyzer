@@ -125,7 +125,7 @@ export function HoldingsPage() {
     }
   };
 
-  // Quantity and average cost as the portfolio counts them: from the purchases when there are
+  // Quantity and average cost as the portfolio counts them: from the transactions when there are
   // any (the live snapshot), else the holding record's own figures.
   const live = useLive();
   const rowsById = useMemo(() => new Map((live.snapshot?.rows ?? []).map((r) => [r.id, r])), [live.snapshot]);
@@ -173,9 +173,7 @@ export function HoldingsPage() {
       header: "ID",
       sortKey: "id",
       cell: (i) => (
-        <Link className="id-chip" to={`/holding/${encodeURIComponent(i.instrument_id)}`} aria-label={`${i.instrument_id}: open details`}>
-          {i.instrument_id}
-        </Link>
+        <span className="id-chip">{i.instrument_id}</span>
       ),
     },
     {
@@ -183,10 +181,18 @@ export function HoldingsPage() {
       header: "Name",
       sortKey: "name",
       className: "c-name",
+      // The name is the row's one link; its overlay makes the whole row open the holding (rowHref).
+      link: true,
       cell: (i) => (
-        <Link className="name-link" to={`/holding/${encodeURIComponent(i.instrument_id)}`}>
-          {i.name}
-        </Link>
+        <>
+          <span className="name-link">{i.name}</span>
+          {/* everything bought has been sold: kept for its realized P/L, out of the portfolio's value */}
+          {rowsById.get(i.instrument_id)?.closed && (
+            <span className="badge" style={{ marginLeft: 8 }}>
+              Closed
+            </span>
+          )}
+        </>
       ),
     },
     { key: "type", header: "Type", sortKey: "type", cell: (i) => typeLabel(i.asset_type) },
@@ -305,6 +311,7 @@ export function HoldingsPage() {
                 sf={sf}
                 columns={columns}
                 rowKey={(i) => i.instrument_id}
+                rowHref={(i) => `/holding/${encodeURIComponent(i.instrument_id)}`}
                 label="holdings"
                 variant="stack"
                 className="dt-hold"
@@ -355,6 +362,9 @@ interface HoldingFormProps {
 
 function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: HoldingFormProps) {
   const uid = useId();
+  // fund:<ISIN> prices exist only for Hungarian funds: mention it to HUF users or where it is already used
+  const base = useLive().snapshot?.base_currency;
+  const fundHint = base === "HUF" || form.currency.trim().toUpperCase() === "HUF" || form.market_symbol.trim().startsWith("fund:");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const set = (k: keyof FormState) => (e: { target: { value: string } }) => setForm({ ...form, [k]: e.target.value });
@@ -437,7 +447,7 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: Hold
             <label htmlFor={fid("sym")}>Market symbol, optional</label>
             <input id={fid("sym")} value={form.market_symbol} onChange={set("market_symbol")} autoComplete="off" spellCheck={false} aria-describedby={fid("symh")} />
             <span id={fid("symh")} className="help">
-              Yahoo ticker (e.g. VWCE.DE, GC=F) or fund:&lt;ISIN&gt; for Hungarian funds
+              {fundHint ? "Yahoo ticker (e.g. VWCE.DE, GC=F), or fund:<ISIN> for a Hungarian investment fund" : "Yahoo ticker (e.g. VWCE.DE, GC=F)"}
             </span>
           </div>
           <div className="field">

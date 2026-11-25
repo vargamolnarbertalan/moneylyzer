@@ -11,6 +11,8 @@ from typing import Iterable, Iterator
 
 import pandas as pd
 
+from analyzer.engine import fifo_shortfall, shortfall_message, units_text
+
 ROOT = Path(__file__).resolve().parents[1]
 # LIA_DATA_DIR lets the container keep the database on a mounted volume.
 DATA_DIR = Path(os.environ.get("LIA_DATA_DIR") or ROOT / "data")
@@ -128,10 +130,12 @@ def initialize() -> None:
 
             DROP INDEX IF EXISTS idx_prices_instrument_date;  -- duplicated the primary key
 
-            -- One row per purchase. unit_price is in the instrument's quote currency and
-            -- price convention (price_divisor applies). paid_amount/paid_currency is what was
-            -- actually paid (fees included) when known; otherwise the cost in the reporting
-            -- currency is derived from fx_usd rates on buy_date.
+            -- One row per transaction (a buy or a sell; the table keeps its old name). buy_date is the
+            -- trade date. unit_price is in the instrument's quote currency and price convention
+            -- (price_divisor applies). paid_amount/paid_currency is what was actually paid (fees
+            -- included) for a buy, or received (net of fees) for a sell, when known; otherwise the
+            -- amount in the reporting currency is derived from fx_usd rates on the trade date.
+            -- quantity stays positive: the side says which way it goes.
             CREATE TABLE IF NOT EXISTS lots (
                 lot_id INTEGER PRIMARY KEY AUTOINCREMENT,
                 instrument_id TEXT NOT NULL,
@@ -141,7 +145,8 @@ def initialize() -> None:
                 paid_amount REAL CHECK(paid_amount IS NULL OR paid_amount > 0),
                 paid_currency TEXT,
                 notes TEXT,
-                platform TEXT,  -- broker / app / bank the purchase was made at (free text)
+                platform TEXT,  -- broker / app / bank the transaction was made at (free text)
+                side TEXT NOT NULL DEFAULT 'buy' CHECK(side IN ('buy','sell')),
                 FOREIGN KEY (instrument_id) REFERENCES instruments(instrument_id) ON DELETE CASCADE
             );
 
@@ -168,6 +173,7 @@ def initialize() -> None:
         )
         _migrate_lot_payment(conn)
         _migrate_lot_platform(conn)
+        _migrate_lot_side(conn)
 
 
 def _migrate_lot_payment(conn: sqlite3.Connection) -> None:
@@ -186,6 +192,17 @@ def _migrate_lot_platform(conn: sqlite3.Connection) -> None:
     if "platform" not in cols:
         try:
             conn.execute("ALTER TABLE lots ADD COLUMN platform TEXT")
+        except sqlite3.OperationalError as exc:  # another process added it a moment ago
+            if "duplicate column" not in str(exc).lower():
+                raise
+
+
+def _migrate_lot_side(conn: sqlite3.Connection) -> None:
+    """Transactions can be sells since Nov 2026; every older row was a purchase, which the default says."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(lots)")}
+    if "side" not in cols:
+        try:
+            conn.execute("ALTER TABLE lots ADD COLUMN side TEXT NOT NULL DEFAULT 'buy' CHECK(side IN ('buy','sell'))")
         except sqlite3.OperationalError as exc:  # another process added it a moment ago
             if "duplicate column" not in str(exc).lower():
                 raise
@@ -358,7 +375,7 @@ def add_lot(lot: dict) -> None:
 
 
 def get_lots(instrument_id: str | None = None) -> pd.DataFrame:
-    sql = "SELECT lot_id, instrument_id, buy_date, quantity, unit_price, paid_amount, paid_currency, notes, platform FROM lots"
+    sql = "SELECT lot_id, instrument_id, buy_date, side, quantity, unit_price, paid_amount, paid_currency, notes, platform FROM lots"
     params: tuple = ()
     if instrument_id is not None:
         sql += " WHERE instrument_id = ?"
@@ -367,8 +384,32 @@ def get_lots(instrument_id: str | None = None) -> pd.DataFrame:
         return pd.read_sql_query(sql + " ORDER BY instrument_id, buy_date, lot_id", conn, params=params)
 
 
+class SaleTooLarge(ValueError):
+    """A sale would be larger than the units held on its date, or would leave a later sale so.
+
+    `row` is the index, in the list given to add_lots, of the sale to blame (for a CSV line number)."""
+
+    def __init__(self, message: str, row: int):
+        super().__init__(message)
+        self.row = row
+
+
+class NoPurchases(SaleTooLarge):
+    """A sale on a holding that has no stored purchase: its units come from the holding record."""
+
+
+class LotInUse(ValueError):
+    """A buy cannot be deleted while a later sale needs its units."""
+
+
 def delete_lot(lot_id: int) -> None:
     with connect() as conn:
+        row = conn.execute("SELECT instrument_id, side FROM lots WHERE lot_id = ?", (int(lot_id),)).fetchone()
+        if row is not None and row["side"] == "buy":
+            rest = conn.execute("SELECT lot_id, buy_date, side, quantity FROM lots WHERE instrument_id = ? AND lot_id != ?",
+                                (row["instrument_id"], int(lot_id))).fetchall()
+            if fifo_shortfall([dict(r) for r in rest]):
+                raise LotInUse("A later sale uses these units. Delete the sale first.")
         conn.execute("DELETE FROM lots WHERE lot_id = ?", (int(lot_id),))
 
 
@@ -413,6 +454,9 @@ def fx_usd_series(currency: str) -> pd.Series:
 def _lot_values(lot: dict) -> tuple:
     raw = lot.get("paid_amount")
     paid = None if raw is None or pd.isna(raw) or float(raw) <= 0 else float(raw)
+    side = str(lot.get("side") or "buy").strip().lower()
+    if side not in ("buy", "sell"):
+        raise ValueError("side must be buy or sell")
     return (
         str(lot["instrument_id"]).strip(),
         pd.to_datetime(lot["buy_date"]).date().isoformat(),
@@ -422,32 +466,62 @@ def _lot_values(lot: dict) -> tuple:
         (str(lot.get("paid_currency") or "").strip().upper() or None) if paid is not None else None,
         lot.get("notes") or None,
         (str(lot.get("platform") or "").strip()[:60] or None),
+        side,
     )
 
 
 def add_lots(lots: list[dict]) -> tuple[int, int]:
-    """Insert purchases in one transaction; exact duplicates of stored lots are skipped.
+    """Insert transactions in one transaction; exact duplicates of stored lots are skipped.
 
     Returns (added, skipped). A failure inserts nothing, so a retried import never half-duplicates.
+    A sale larger than the units held on its date (FIFO replay of everything stored plus the new rows,
+    checked after the duplicates are dropped) raises SaleTooLarge and inserts nothing.
+    The rows are stored by trade date, buys before sells on the same date, whatever order they were given in:
+    an export that lists the newest first (a sale above the buy it sells) imports the same as an oldest-first one.
     """
     added = skipped = 0
+    prepared = sorted(((index, _lot_values(lot)) for index, lot in enumerate(lots)),
+                      key=lambda p: (p[1][1], p[1][8] == "sell"))  # stable: ties keep the file's order
     with connect() as conn:
-        for lot in lots:
-            values = _lot_values(lot)
+        new_ids: dict[int, int] = {}      # lot_id of each inserted row -> its index in `lots`
+        first_sale: dict[str, int] = {}   # instrument_id -> index of its first inserted sale
+        for index, values in prepared:
             duplicate = conn.execute(
                 "SELECT 1 FROM lots WHERE instrument_id=? AND buy_date=? AND quantity=? AND unit_price=? "
-                "AND paid_amount IS ? AND paid_currency IS ? AND platform IS ? LIMIT 1",
-                (*values[:6], values[7]),
+                "AND paid_amount IS ? AND paid_currency IS ? AND platform IS ? AND side=? LIMIT 1",
+                (*values[:6], values[7], values[8]),
             ).fetchone()
             if duplicate:
                 skipped += 1
                 continue
-            conn.execute(
-                "INSERT INTO lots(instrument_id, buy_date, quantity, unit_price, paid_amount, paid_currency, notes, platform) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            cursor = conn.execute(
+                "INSERT INTO lots(instrument_id, buy_date, quantity, unit_price, paid_amount, paid_currency, notes, platform, side) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 values,
             )
+            new_ids[cursor.lastrowid] = index
+            if values[8] == "sell":
+                first_sale[values[0]] = min(index, first_sale.get(values[0], index))
             added += 1
+        # Only a new sale can break the replay (an extra buy never does).
+        for instrument_id, index in first_sale.items():
+            stored = [dict(r) for r in conn.execute("SELECT lot_id, buy_date, side, quantity FROM lots WHERE instrument_id = ?",
+                                                    (instrument_id,)).fetchall()]
+            if not any(r["side"] == "buy" for r in stored):
+                # a holding whose units come from its holding record: there is nothing to sell from yet
+                raise NoPurchases("This holding's units come from its holding record. "
+                                  "Record its purchases first, then the sale.", index)
+            problem = fifo_shortfall(stored)
+            if problem is None:
+                continue
+            if problem["lot"]["lot_id"] in new_ids:
+                raise SaleTooLarge(shortfall_message(problem), new_ids[problem["lot"]["lot_id"]])
+            # An older sale is starved: blame the last new sale (in FIFO order) dated before it.
+            causes = [r for r in stored if r["lot_id"] in new_ids and r["side"] == "sell" and r["buy_date"] < problem["date"]]
+            if causes:
+                index = new_ids[max(causes, key=lambda r: (r["buy_date"], r["lot_id"]))["lot_id"]]
+            raise SaleTooLarge(f"That would leave your sale on {problem['date']} larger than the "
+                               f"{units_text(problem['held'])} you would hold then.", index)
     return added, skipped
 
 

@@ -210,6 +210,159 @@ def currency_value(quantity: float, price: float, price_divisor: float = 1.0) ->
     return float(quantity) * float(price) / divisor
 
 
+def _known(x) -> bool:
+    return x is not None and not pd.isna(x)
+
+
+def _tiny(total: float) -> float:
+    """Float dust: what is left of a lot after sales that should have used it up exactly."""
+    return 1e-9 * max(1.0, total)
+
+
+def fifo_replay(lots: list[dict]) -> tuple[list[tuple[dict, float]], list[dict]]:
+    """Replay transactions oldest first (same date: lower lot_id first); each sale uses up the oldest open buys.
+
+    Returns (open_buys, sales): open_buys = [(buy, units still held)]; sales = [{"lot": the sale,
+    "pieces": [(buy, units taken from it)], "short": units no earlier buy could cover}].
+    A lot without "side" is a buy; one without a lot_id (not stored yet) sorts after the stored ones.
+    """
+    order = sorted(enumerate(lots), key=lambda p: (str(p[1]["buy_date"]), p[1].get("lot_id", float("inf")), p[0]))
+    open_buys: list[list] = []  # [buy, units left]
+    sales = []
+    for _, lot in order:
+        units = float(lot["quantity"])
+        if lot.get("side") != "sell":
+            open_buys.append([lot, units])
+            continue
+        pieces, need = [], units
+        for entry in open_buys:
+            if need <= _tiny(units):
+                break
+            take = min(entry[1], need)
+            if take > 0:
+                pieces.append((entry[0], take))
+                entry[1] -= take
+                need -= take
+        sales.append({"lot": lot, "pieces": pieces, "short": need if need > _tiny(units) else 0.0})
+    held = [(buy, left) for buy, left in open_buys if left > _tiny(float(buy["quantity"]))]
+    return held, sales
+
+
+def fifo_shortfall(lots: list[dict]) -> dict | None:
+    """The first sale larger than the units held on its date, as {lot, date, held, quantity}; None when all fit."""
+    for sale in fifo_replay(lots)[1]:
+        if sale["short"]:
+            lot = sale["lot"]
+            quantity = float(lot["quantity"])
+            return {"lot": lot, "date": str(lot["buy_date"]), "held": max(quantity - sale["short"], 0.0), "quantity": quantity}
+    return None
+
+
+def plain_number(x: float) -> str:
+    """Fixed notation, at most 8 decimals, no trailing zeros: 1500000 and 1234.5678, never 1.5e+06."""
+    return f"{round(x, 8) + 0.0:.8f}".rstrip("0").rstrip(".")  # + 0.0 turns -0.0 into 0.0
+
+
+def units_text(units: float) -> str:
+    return f"{plain_number(units)} {'unit' if round(units, 8) == 1 else 'units'}"
+
+
+def shortfall_message(shortfall: dict) -> str:
+    return f"On {shortfall['date']} you held {units_text(shortfall['held'])}; a sale can't be larger."
+
+
+def _base_amount(lot: dict, units: float, currency: str, divisor: float, base: str,
+                 rate_on: Callable[[str, str], float | None]) -> tuple[float | None, str | None, str]:
+    """Base-currency value of `units` of one transaction: a buy's cost or a sale's proceeds.
+
+    The amount actually paid or received (any currency, pro rata for part of the lot) at that day's
+    rate, else unit price x units at the holding currency's rate. Returns (value, problem, currency):
+    problem is None, "price" (no price or amount) or "rate" (that currency's rate is missing).
+    """
+    day = str(lot["buy_date"])
+
+    def rate(ccy: str) -> float | None:
+        return 1.0 if ccy == base else rate_on(ccy, day)
+
+    paid = lot.get("paid_amount")
+    if _known(paid) and float(paid) > 0:
+        raw_ccy = lot.get("paid_currency")
+        paid_ccy = (str(raw_ccy) if _known(raw_ccy) and str(raw_ccy).strip() else currency).strip().upper()
+        r = rate(paid_ccy)
+        if r is None:
+            return None, "rate", paid_ccy
+        return float(paid) * r * (units / float(lot["quantity"])), None, paid_ccy
+    unit = lot.get("unit_price")
+    if not _known(unit) or float(unit) <= 0:
+        return None, "price", ""
+    r = rate(currency)
+    if r is None:
+        return None, "rate", currency
+    return units * float(unit) / divisor * r, None, currency
+
+
+def _settle_sales(sales: list[dict], currency: str, divisor: float, base: str,
+                  rate_on: Callable[[str, str], float | None]) -> list[dict]:
+    """Realized P/L of each sale in the base currency: proceeds minus the FIFO cost of the units it used up.
+
+    realized_base is None when any piece is unknown (never 0); `problems` lists what is missing as
+    (who, kind, detail): who is "sale" or "buy", kind "price" or "rate" (detail: the currency whose rate
+    is missing) or "short" (the sale is larger than the units held; detail: what to tell the user).
+    """
+    settled = []
+    for sale in sales:
+        lot = sale["lot"]
+        held = max(float(lot["quantity"]) - sale["short"], 0.0)
+        problems = ([("sale", "short", f"Sale on {lot['buy_date']} is larger than the {units_text(held)} held then")]
+                    if sale["short"] else [])
+        proceeds, problem, ccy = _base_amount(lot, float(lot["quantity"]), currency, divisor, base, rate_on)
+        if problem:
+            problems.append(("sale", problem, ccy))
+        cost = 0.0
+        for buy, units in sale["pieces"]:
+            value, problem, ccy = _base_amount(buy, units, currency, divisor, base, rate_on)
+            if problem:
+                problems.append(("buy", problem, ccy))
+            else:
+                cost += value
+        settled.append({"lot": lot, "realized_base": None if problems else proceeds - cost, "problems": problems})
+    return settled
+
+
+def realized_by_sale(item: dict, lots: list[dict], rate_on: Callable[[str, str], float | None],
+                     base: str = "HUF") -> dict[int, float | None]:
+    """Realized P/L in the base currency of each sale (by lot_id): the holding page shows it per row."""
+    currency = str(item["currency"]).strip().upper()
+    divisor = float(item.get("price_divisor") or 1.0)
+    settled = _settle_sales(fifo_replay(lots)[1], currency, divisor, base.upper(), rate_on)
+    return {s["lot"]["lot_id"]: s["realized_base"] for s in settled}
+
+
+def _sale_notes(settled: list[dict], base: str) -> list[str]:
+    notes, no_price, rates, buy_no_price, buy_rates = [], 0, set(), False, set()
+    for s in settled:
+        for who, kind, detail in s["problems"]:
+            if kind == "short":
+                notes.append(f"{detail}: realized P/L unknown")
+            elif who == "sale" and kind == "price":
+                no_price += 1
+            elif who == "sale":
+                rates.add(detail)
+            elif kind == "price":
+                buy_no_price = True
+            else:
+                buy_rates.add(detail)
+    if no_price:
+        notes.append(f"{no_price} sale(s) without unit price or amount received: realized P/L unknown")
+    if rates:
+        notes.append(f"{'/'.join(sorted(rates))}/{base} rate missing for a sale date: realized P/L unknown")
+    if buy_no_price:
+        notes.append("A purchase that was sold has no unit price or amount paid: realized P/L unknown")
+    if buy_rates:
+        notes.append(f"{'/'.join(sorted(buy_rates))}/{base} rate missing for the buy date of units sold: realized P/L unknown")
+    return notes
+
+
 def summarize_position(
     item: dict,
     lots: list[dict],
@@ -219,11 +372,13 @@ def summarize_position(
     rate_on: Callable[[str, str], float | None],
     base: str = "HUF",
 ) -> dict:
-    """Live value and unrealized P/L of one holding, in its own currency and in the base currency.
+    """Live value, unrealized and realized P/L of one holding, in its own currency and in the base currency.
 
     item: instrument row (quantity, avg_cost, currency, price_divisor).
-    lots: purchases (buy_date, quantity, unit_price, paid_amount, paid_currency); when present they
-          define the quantity and average cost, otherwise the instrument row does.
+    lots: transactions (buy_date, side buy/sell, quantity, unit_price, paid_amount, paid_currency); when
+          present they define the quantity and average cost, otherwise the instrument row does. Sales use
+          up the oldest buys first (FIFO): the buys still open give quantity, average cost and cost base,
+          and each sale's proceeds minus the cost of the units it used up is its realized P/L.
     fx_now: current base-currency value of one unit per currency (the base itself is implicitly 1).
     rate_on(currency, date): base-currency value of one unit of `currency` on that date, or None.
     A None anywhere means "unknown"; it never silently becomes 0.
@@ -233,63 +388,57 @@ def summarize_position(
     divisor = float(item.get("price_divisor") or 1.0)
     out = {
         "quantity": None, "avg_cost": None, "value": None, "value_base": None, "cost": None,
-        "cost_base": None, "pnl": None, "pnl_base": None, "pnl_pct": None, "fx_now": None, "check": "",
+        "cost_base": None, "pnl": None, "pnl_base": None, "pnl_pct": None, "fx_now": None,
+        "realized_base": 0.0, "sells": 0, "closed": False, "check": "",
     }
     notes = []
-
-    def known(x) -> bool:
-        return x is not None and not pd.isna(x)
-
-    def rate(ccy: str, day: str) -> float | None:
-        return 1.0 if ccy == base else rate_on(ccy, day)
+    open_buys: list[tuple[dict, float]] = []
+    sales: list[dict] = []
 
     if lots:
-        quantity = sum(float(lot["quantity"]) for lot in lots)
-        priced = [lot for lot in lots if known(lot.get("unit_price")) and float(lot["unit_price"]) > 0]
-        # Average cost only when every lot has a unit price; a partial average would understate it.
+        open_buys, sales = fifo_replay(lots)
+        quantity = sum((left for _, left in open_buys), 0.0)
+        priced = [(buy, left) for buy, left in open_buys if _known(buy.get("unit_price")) and float(buy["unit_price"]) > 0]
+        # Average cost only when every open buy has a unit price; a partial average would understate it.
         avg_cost = (
-            sum(float(lot["quantity"]) * float(lot["unit_price"]) for lot in priced) / quantity
-            if len(priced) == len(lots) else None
+            sum(left * float(buy["unit_price"]) for buy, left in priced) / quantity
+            if open_buys and len(priced) == len(open_buys) else None
         )
         row_qty = item.get("quantity")
-        if known(row_qty) and float(row_qty) > 0 and abs(float(row_qty) - quantity) > 1e-9 * max(1.0, quantity):
-            notes.append(f"Purchases total {quantity:g} units but the holding row says {float(row_qty):g}; purchases are used")
+        if _known(row_qty) and float(row_qty) > 0 and abs(float(row_qty) - quantity) > 1e-9 * max(1.0, quantity):
+            notes.append(f"Transactions total {plain_number(quantity)} units but the holding row says {plain_number(float(row_qty))}; transactions are used")
     else:
         quantity = float(item.get("quantity") or 0.0)
         raw_avg = item.get("avg_cost")
-        avg_cost = float(raw_avg) if known(raw_avg) and float(raw_avg) > 0 else None
+        avg_cost = float(raw_avg) if _known(raw_avg) and float(raw_avg) > 0 else None
     out["quantity"], out["avg_cost"] = quantity, avg_cost
+    closed = bool(lots) and not open_buys  # every unit bought has been sold
+    out["closed"], out["sells"] = closed, len(sales)
+
+    settled = _settle_sales(sales, currency, divisor, base, rate_on)
+    if any(s["realized_base"] is None for s in settled):
+        out["realized_base"] = None
+    else:
+        out["realized_base"] = sum(s["realized_base"] for s in settled)
+    notes.extend(_sale_notes(settled, base))
 
     rate_now = 1.0 if currency == base else fx_now.get(currency)
     out["fx_now"] = rate_now
     if avg_cost is not None:
         out["cost"] = quantity * avg_cost / divisor
 
-    # Cost in the base currency: per lot the amount actually paid (any currency) at the buy-date rate,
-    # else unit price x quantity at the buy-date rate of the holding's currency.
+    # Cost in the base currency of the units still held: per open buy the amount actually paid (any
+    # currency) at the buy-date rate, else unit price x quantity at the buy-date rate of the holding's currency.
     if lots:
         total, missing_rate, missing_price = 0.0, set(), 0
-        for lot in lots:
-            day = str(lot["buy_date"])
-            paid = lot.get("paid_amount")
-            if known(paid) and float(paid) > 0:
-                raw_ccy = lot.get("paid_currency")
-                paid_ccy = (str(raw_ccy) if known(raw_ccy) and str(raw_ccy).strip() else currency).strip().upper()
-                r = rate(paid_ccy, day)
-                if r is None:
-                    missing_rate.add(paid_ccy)
-                else:
-                    total += float(paid) * r
-                continue
-            unit = lot.get("unit_price")
-            if not known(unit) or float(unit) <= 0:
+        for buy, left in open_buys:
+            value, problem, ccy = _base_amount(buy, left, currency, divisor, base, rate_on)
+            if problem == "price":
                 missing_price += 1
-                continue
-            r = rate(currency, day)
-            if r is None:
-                missing_rate.add(currency)
+            elif problem == "rate":
+                missing_rate.add(ccy)
             else:
-                total += float(lot["quantity"]) * float(unit) / divisor * r
+                total += value
         if missing_price:
             notes.append(f"{missing_price} purchase(s) without unit price or amount paid: cost unknown")
         if missing_rate:
@@ -301,7 +450,9 @@ def summarize_position(
     else:
         notes.append(f"Add purchases to see P/L in {base}")
 
-    if price is None:
+    if closed:
+        out["value"] = out["value_base"] = 0.0  # nothing held, whatever the price says; only realized P/L remains
+    elif price is None:
         notes.append("No price yet")
     elif currency_mismatch(currency, price_currency, divisor):
         notes.append(f"Price quoted in {price_currency}, holding in {currency}: value not calculated")

@@ -1,9 +1,10 @@
 """The advisor layer: providers, persona settings, and the context pack sent with each question.
 
 Privacy: the context is built per provider data level.
-- "relative" (default): names, tickers, types, currencies, weights, % changes, indicators.
-- "full": additionally amounts in the reporting currency, quantities, average costs, purchase lots with dates
-  and platforms, holding notes and data checks.
+- "relative" (default): names, tickers, types, currencies, weights, % changes, indicators, and whether a
+  holding is closed (everything sold).
+- "full": additionally amounts in the reporting currency, quantities, average costs, realized P/L, transactions
+  (buys and sells, under "purchases") with dates and platforms, holding notes and data checks.
 """
 from __future__ import annotations
 
@@ -122,8 +123,8 @@ def delete_provider(provider_id: str) -> None:
 
 
 def set_data_level(provider_id: str, level: str) -> None:
-    """What a model may see: 'relative' (weights, % changes) or 'full' (also amounts, quantities, costs, dates,
-    platforms and holding notes)."""
+    """What a model may see: 'relative' (weights, % changes, whether a holding is sold out) or 'full' (also
+    amounts, quantities, costs, dates, platforms and holding notes)."""
     if level not in ("relative", "full"):
         raise ValueError("data_level must be relative or full")
     with db.connect() as conn:
@@ -194,7 +195,8 @@ def save_settings(persona: str | None, preferences: dict | None, rules: list[str
 
 # ---------------------------------------------------------------- context
 RELATIVE_ROW_KEYS = ("id", "name", "type", "currency", "symbol", "weight", "pnl_pct", "today_pct", "price_source", "as_of")
-FULL_ROW_KEYS = RELATIVE_ROW_KEYS + ("quantity", "price", "avg_cost", "value_base", "cost_base", "pnl_base", "today_base")
+FULL_ROW_KEYS = RELATIVE_ROW_KEYS + ("quantity", "price", "avg_cost", "value_base", "cost_base", "pnl_base", "today_base",
+                                     "realized_base")
 
 
 def _text_or_none(value) -> str | None:
@@ -218,6 +220,7 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
         item = {k: _r(r.get(k)) for k in keys}
         inst = instruments.get(str(r["id"]), {})
         item["price_divisor"] = _r(float(inst.get("price_divisor") or 1))
+        item["closed"] = bool(r.get("closed"))  # everything sold: no weight, no value; says nothing about amounts
         if level == "full":
             notes = _text_or_none(inst.get("notes"))
             if notes:
@@ -233,7 +236,9 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
             series[f"{r['id']} ({r['name'][:24]})"] = s[~s.index.duplicated(keep="last")]
         if level == "full":
             lots = db.get_lots(r["id"])
-            item["purchases"] = [{"date": l["buy_date"], "quantity": _r(l["quantity"]), "unit_price": _r(l["unit_price"]),
+            # buys and sells (the key keeps its name); for a sell paid_amount is what was received
+            item["purchases"] = [{"date": l["buy_date"], "side": l["side"], "quantity": _r(l["quantity"]),
+                                  "unit_price": _r(l["unit_price"]),
                                   "paid_amount": _r(l["paid_amount"]), "paid_currency": _text_or_none(l["paid_currency"]),
                                   "platform": _text_or_none(l.get("platform"))}
                                  for l in lots.to_dict("records")]
@@ -247,7 +252,7 @@ def build_context(snapshot: dict, level: str, instrument_id: str | None = None) 
         "as_of": snapshot.get("updated_at"),
         "portfolio": {
             "holdings": holdings,
-            "totals": ({k: _r(totals.get(k)) for k in ("value_base", "pnl_base", "pnl_pct", "today_base", "today_pct")}
+            "totals": ({k: _r(totals.get(k)) for k in ("value_base", "pnl_base", "pnl_pct", "today_base", "today_pct", "realized_base")}
                        if level == "full" else {k: _r(totals.get(k)) for k in ("pnl_pct", "today_pct")}),
             "currency_exposure": {k: round(v, 4) for k, v in exposure.items()},
             "reporting_currency": snapshot.get("base_currency"),

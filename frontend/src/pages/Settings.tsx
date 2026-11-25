@@ -75,7 +75,7 @@ export function SettingsPage() {
         <div className="stack">
           <Card as="section" aria-labelledby="data-h">
             <CardHeader id="data-h" title="Your data" />
-            <p className="sub">The database backup is one SQLite file with your holdings, purchases, stored prices and settings.</p>
+            <p className="sub">The database backup is one SQLite file with your holdings, transactions, stored prices and settings.</p>
             <div className="btn-row" style={{ marginTop: 12 }}>
               <a className="btn ghost" href="/api/backup">
                 Download database backup
