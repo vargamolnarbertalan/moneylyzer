@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { ChevronDown, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { Check, ChevronDown, Copy, Download, ExternalLink, ShieldAlert, ShieldCheck, SlidersHorizontal, X } from "lucide-react";
 import { AI_ANSWER_NOTE } from "../legal";
-import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, historyBefore, loadChat, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
+import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, conversationMarkdown, historyBefore, loadChat, memoryStart, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
+import { copyText, downloadText } from "../clipboard";
 import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type Provider } from "../api";
 import { effortPhrase } from "../effort";
 import { ModelMenu, chatModel, withEffort } from "../components/ai/ChatPickers";
@@ -147,6 +148,8 @@ export function AdvisorPage() {
   const textareaId = useId();
   const rows = Math.min(6, Math.max(2, draft.split("\n").length));
   const empty = chat.messages.length === 0;
+  // Only the last MAX_HISTORY messages go with the next question: mark where the analyst's memory begins.
+  const forgotten = memoryStart(chat.messages);
   const lastIsUser = chat.messages[chat.messages.length - 1]?.role === "user";
 
   return (
@@ -168,6 +171,19 @@ export function AdvisorPage() {
               <SlidersHorizontal aria-hidden="true" />
               Models, rules &amp; persona
             </Link>
+            {!empty && (
+              <button
+                type="button"
+                className="btn ghost small"
+                onClick={() => {
+                  const now = new Date();
+                  downloadText(`moneylyzer-conversation-${now.toISOString().slice(0, 10)}.md`, conversationMarkdown(chat.messages, now, AI_ANSWER_NOTE));
+                }}
+              >
+                <Download aria-hidden="true" />
+                Export
+              </button>
+            )}
             {!empty && (
               <button type="button" className="btn ghost small" onClick={newConversation} disabled={waiting}>
                 New conversation
@@ -228,7 +244,16 @@ export function AdvisorPage() {
               The AI analyst sees your holdings ({RELATIVE_ITEMS}, unless you turned on full detail for the model), market benchmarks and recent news. Pick a quick question or type your own.
             </div>
           )}
-          {chat.messages.map((m) => (m.role === "user" ? <div key={m.id} className="msg user"><p>{m.content}</p></div> : <Answer key={m.id} m={m} />))}
+          {chat.messages.map((m, i) => (
+            <Fragment key={m.id}>
+              {i === forgotten && forgotten > 0 && (
+                <div className="memory-line" role="separator" aria-label="The analyst no longer sees the messages above">
+                  <span>The analyst no longer sees the messages above. Start a new conversation, or repeat what still matters.</span>
+                </div>
+              )}
+              {m.role === "user" ? <div className="msg user"><p>{m.content}</p></div> : <Answer m={m} />}
+            </Fragment>
+          ))}
           {waiting && (
             <div className="msg assistant pending" role="status">
               <span className="spinner" aria-hidden="true" /> The AI analyst is thinking
@@ -298,6 +323,27 @@ export function AdvisorPage() {
   );
 }
 
+function CopyButton({ text }: { text: string }) {
+  const [state, setState] = useState<"idle" | "done" | "failed">("idle");
+  useEffect(() => {
+    if (state === "idle") return;
+    const t = window.setTimeout(() => setState("idle"), 2000);
+    return () => window.clearTimeout(t);
+  }, [state]);
+  return (
+    <>
+      <button type="button" className="btn ghost small copy-btn" onClick={async () => setState((await copyText(text)) ? "done" : "failed")}>
+        {state === "done" ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        {state === "done" ? "Copied" : state === "failed" ? "Copy failed" : "Copy"}
+        <span className="sr-only"> answer</span>
+      </button>
+      <span className="sr-only" role="status">
+        {state === "done" ? "Answer copied" : state === "failed" ? "Could not copy the answer" : ""}
+      </span>
+    </>
+  );
+}
+
 function Answer({ m }: { m: ChatMessage }) {
   const meta = m.meta;
   const sources = (meta?.sources ?? []).map((s) => ({ ...s, href: safeUrl(s.url) })).filter((s) => s.href);
@@ -311,7 +357,10 @@ function Answer({ m }: { m: ChatMessage }) {
         </div>
       )}
       <Markdown source={m.content} />
-      <p className="ai-note">{AI_ANSWER_NOTE}</p>
+      <div className="msg-tools">
+        <p className="ai-note">{AI_ANSWER_NOTE}</p>
+        <CopyButton text={m.content} />
+      </div>
       {sources.length > 0 && (
         <div className="sources">
           <b>Sources</b>

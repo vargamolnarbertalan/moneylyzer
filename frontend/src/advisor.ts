@@ -129,6 +129,32 @@ export function takeQueuedQuestion(): { question: string; holding: string | null
 }
 
 /** The last turns before a question, as the API wants them: plain question and answer text, at most 24 entries. */
+/** Index of the oldest message the next question still sends (historyBefore keeps the last MAX_HISTORY);
+ *  0 while the whole conversation fits. Messages before it are no longer seen by the analyst. */
+export function memoryStart(messages: readonly ChatMessage[]): number {
+  return Math.max(0, messages.length - MAX_HISTORY);
+}
+
+/** The conversation as a Markdown document: questions, answers with their model, effort and sources. */
+export function conversationMarkdown(messages: readonly ChatMessage[], exportedAt: Date, aiNote: string): string {
+  const lines = [`# AI analyst conversation`, "", `Exported from Moneylyzer on ${exportedAt.toISOString().slice(0, 16).replace("T", " ")} UTC.`, "", `> ${aiNote}`];
+  for (const m of messages) {
+    if (m.role === "user") {
+      lines.push("", "## Question", "", m.content);
+      continue;
+    }
+    const meta = m.meta;
+    const by = meta ? [meta.provider.name, meta.model, meta.effort ? (meta.effort === "default" ? "model default effort" : `effort ${meta.effort}`) : null].filter(Boolean).join(" · ") : null;
+    lines.push("", by ? `## Answer (${by})` : "## Answer", "", m.content);
+    const sources = meta?.sources ?? [];
+    if (sources.length) {
+      lines.push("", "Sources:");
+      for (const s of sources) lines.push(`- [${(s.title || s.url).replace(/[[\]]/g, "")}](${s.url})`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
 export function historyBefore(messages: readonly ChatMessage[], index: number): ChatTurn[] {
   return messages
     .slice(0, index)
