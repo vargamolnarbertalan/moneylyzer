@@ -6,7 +6,7 @@ import { useResource } from "../hooks";
 import { Link, navigate } from "../router";
 import { AiMark } from "./AiMark";
 import { Card } from "./Card";
-import { ChatPickers, withEffort, chatModel } from "./ai/ChatPickers";
+import { ModelMenu, withEffort, chatModel } from "./ai/ChatPickers";
 
 const CHIPS = QUICK_PROMPTS.slice(0, 3);
 
@@ -44,22 +44,22 @@ export function AdvisorCard({ className }: { className?: string }) {
         </div>
         <span className="tag">online · on send</span>
       </div>
-      <ChatPickers
-        chat={chat}
-        list={list}
-        loading={providers.loading}
-        className="compact"
-        onModel={(v) => {
-          clearChat(); // another model starts a new conversation, as on the AI analyst page
-          setChat({ providerId: v, messages: [] });
-        }}
-        onEffort={(v) => setChat(withEffort(chat, selected, v))}
-      />
       <form className="advisor-ask" onSubmit={submit}>
         <label className="sr-only" htmlFor={`${uid}q`}>
           Ask about your portfolio
         </label>
         <input id={`${uid}q`} className="input" value={text} onChange={(e) => setText(e.target.value)} placeholder="Ask about your portfolio…" autoComplete="off" maxLength={2000} />
+        <ModelMenu
+          chat={chat}
+          list={list}
+          loading={providers.loading}
+          side="bottom"
+          onModel={(v) => {
+            clearChat(); // another model starts a new conversation, as on the AI analyst page
+            setChat({ providerId: v, messages: [] });
+          }}
+          onEffort={(v) => setChat(withEffort(chat, selected, v))}
+        />
         <button type="submit" className="btn ask-btn" disabled={!text.trim()}>
           <Sparkles aria-hidden="true" />
           {/* Both labels share one grid cell, so the button is as wide as the longer one and the hover
