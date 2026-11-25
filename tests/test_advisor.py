@@ -104,6 +104,7 @@ class PersonaTests(unittest.TestCase):
         short = persona.compose_system_prompt("Short persona.", {}, "relative", False)
         self.assertNotIn("# Platforms", short)
         self.assertIn("Non-negotiable guardrails", short)
+        self.assertIn("Evidence: never invent prices, figures, dates, quotes or events", short)  # fixed, not persona
         # whatever the persona: without web access, no provider fees or terms from memory
         self.assertIn("Never state current fees, interest rates, plans or terms of any provider from memory", short)
         self.assertIn("purchase dates or platforms", short)  # relative level says platforms are withheld

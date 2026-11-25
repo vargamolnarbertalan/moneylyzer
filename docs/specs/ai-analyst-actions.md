@@ -52,7 +52,16 @@ path; the conversation-level rule above; a 32k-context hint for local models.
    AI. Check before applying."
 4. **Apply** re-reads the current state; if the item is gone or changed, the card shows the new before → after and asks
    again. It then calls the existing endpoint with only the allow-listed fields.
-5. The card then shows "Applied" or "Dismissed" (kept in the answer's `meta`). Outcomes are not sent back to the model.
+5. **Adjust** puts "About the proposed change (<summary>): " in the question box for the user to finish; it is sent as an
+   ordinary question, and the answer may carry a revised card. The old card shows "Adjusted".
+6. The card then shows "Applied", "Dismissed" or "Adjusted" (kept in the answer's `meta`). Outcomes are not sent back to
+   the model.
+
+**Structured output where the provider has it** (added 2026-11-25, after Vibe-Trading's `claude_cli.py`): the Claude CLI
+(`--json-schema`, print mode; check the flag in the pinned version first) and the Claude API (structured outputs) return
+`{answer, proposals}` checked against our schema by the provider, so malformed blocks don't happen there.
+OpenAI-compatible models keep the text blocks. The server turns both into the same proposal list and validates it the
+same way.
 
 ### Card types
 

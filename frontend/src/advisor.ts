@@ -36,6 +36,11 @@ export const QUICK_PROMPTS: readonly QuickPrompt[] = [
       "Daily briefing: what moved in my portfolio today and why, which news items matter for my holdings and which are noise, and what, if anything, deserves my attention. Keep it short.",
   },
   {
+    label: "Monthly check-up",
+    question:
+      "Give me a monthly check-up of my portfolio in these sections, in this order: Summary (three lines); What changed this month (holdings, markets, news); Rules and preferences (each standing rule and preference: met, drifting or broken, with the figure that shows it); Risks to watch; Data gaps (anything missing, stale or unpriced, or \"none\"). State facts and states only: no buy, sell or hold calls.",
+  },
+  {
     label: "Diversification score",
     question:
       "Score my diversification from 0 to 100 and show the working: (1) concentration: the Herfindahl index (the sum of squared weights) and the effective number of holdings (1 divided by it); (2) the combined weight of my top 3 holdings; (3) how spread my currencies are; (4) the share of all holding pairs (n × (n − 1) / 2) correlated above 0.7, where pairs not listed are weaker than the weakest listed. For each part give the formula, its sub-score and its weight in the total. Then give the total, the three biggest drivers and, in general terms, what would raise the score, without naming instruments to buy or sell. Where sector or region data is not supplied, say so instead of guessing.",
