@@ -11,6 +11,14 @@ export const KIND_LABEL: Record<ProviderKind, string> = {
 };
 
 const EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
+// Claude Code's own aliases (code.claude.com/docs/en/model-config, checked 2026-11-25); each follows the newest version.
+const CLAUDE_ALIASES = ["opus", "sonnet", "haiku", "fable"];
+const MODEL_HELP: Record<ProviderKind, string> = {
+  claude_code:
+    "A short name that always follows the newest version: opus (the default), sonnet (faster), haiku (fastest) or fable (the most capable and slowest; on some plans it uses usage credits instead of your plan's limits). A full model ID such as claude-opus-5-5 pins one version.",
+  anthropic: "A full model ID, such as claude-opus-5-5, claude-sonnet-5-5 or claude-haiku-5-5. Short names like opus work only with Claude login.",
+  openai_compat: "The model name exactly as this provider lists it, for example llama3.1:8b in Ollama.",
+};
 const CUSTOM: Preset = { id: "custom", label: "Custom OpenAI-compatible", kind: "openai_compat", base_url: "", models: [], local: false, needs_key: false };
 const LOCAL_HINT =
   "From the Docker container your PC is host.docker.internal. Ollama listens on 127.0.0.1 by default; if the container can't reach it, start Ollama with OLLAMA_HOST=0.0.0.0. " +
@@ -157,12 +165,15 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
         )}
         <div className="field">
           <label htmlFor={id("model")}>Model</label>
-          <input id={id("model")} list={id("models")} value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={describe("model")} aria-invalid={fieldError("model") ? true : undefined} />
+          <input id={id("model")} list={id("models")} value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={describe("model", id("modelh"))} aria-invalid={fieldError("model") ? true : undefined} />
           <datalist id={id("models")}>
-            {(builtin ? ["opus", "fable", "sonnet"] : models).map((m) => (
+            {(builtin ? CLAUDE_ALIASES : models).map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
+          <span id={id("modelh")} className="help">
+            {MODEL_HELP[kind]}
+          </span>
           {errorText("model")}
         </div>
 
