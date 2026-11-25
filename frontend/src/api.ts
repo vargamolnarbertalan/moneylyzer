@@ -193,6 +193,15 @@ export interface QuotePreview {
   source: string;
 }
 
+export interface IntradayChart {
+  range: string;
+  interval: string;
+  /** As Yahoo quotes it ("GBp"). */
+  currency: string;
+  /** Oldest first; `t` is UTC ("2026-11-25T14:30:00Z"). */
+  points: { t: string; close: number }[];
+}
+
 export interface InstrumentDetail {
   instrument: Instrument;
   position: Nullable<Row>;
@@ -519,6 +528,9 @@ export const endpoints = {
   deleteInstrument: (id: string, confirmPurchases: number) =>
     api.del<{ ok: boolean }>(`/api/instruments/${encodeURIComponent(id)}?confirm_purchases=${confirmPurchases}`),
   instrument: (id: string) => api.get<InstrumentDetail>(`/api/instruments/${encodeURIComponent(id)}`),
+  /** Intraday prices for the holding chart, fetched from Yahoo on demand (daily ones are in `instrument`). */
+  instrumentChart: (id: string, range: string, interval: string) =>
+    api.get<IntradayChart>(`/api/instruments/${encodeURIComponent(id)}/chart?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}`),
 
   addLot: (body: LotInput) => api.post<{ ok: boolean }>("/api/lots", body),
   platforms: () => api.get<string[]>("/api/platforms"),

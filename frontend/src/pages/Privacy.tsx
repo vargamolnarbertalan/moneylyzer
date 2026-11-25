@@ -26,8 +26,8 @@ interface Flow {
 const FLOWS: readonly Flow[] = [
   {
     name: "Yahoo Finance — prices",
-    sends: "the ticker symbols of your holdings, every 60 seconds (daily history once a day).",
-    gets: "live quotes and daily closing prices.",
+    sends: "the ticker symbols of your holdings, every 60 seconds (daily history once a day); a holding's ticker each minute while its chart shows a minute or hour interval.",
+    gets: "live quotes, daily closing prices, and minute or hour prices for that chart (not stored).",
     linkable: "ip",
     linkNote: "No name or account; Yahoo sees the server's IP address with the tickers.",
     sensitive: "Which listed instruments you hold (not how many).",

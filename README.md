@@ -97,7 +97,8 @@ Import in this order: holdings first, then transactions and price history, which
 The **Data & privacy** page in the app lists every outgoing request in detail. In short:
 
 - Ticker symbols and currency pairs go to Yahoo Finance (prices every 60 s, history daily, news hourly,
-  and what you type in the add-holding search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
+  a holding's minute or hour prices while its chart shows them, and what you type in the add-holding
+  search); fund ISINs go to OTP Alapkezelő / BAMOSZ.
 - Your question goes to the AI model you connected, only when you ask, with your AI analyst rules,
   persona and investing preferences, and weights, percentage changes and whether a holding is sold out.
   Amounts, quantities, costs, realized profit, purchase and sale dates, platforms and holding notes are

@@ -106,7 +106,9 @@ export function qty(v: Num): string {
 
 export function ccyLabel(ccy: string | null | undefined): string {
   if (!ccy) return "";
-  return ccy.toUpperCase() === "HUF" ? "Ft" : ccy.toUpperCase();
+  if (ccy.toUpperCase() === "HUF") return "Ft";
+  // Yahoo's minor units keep their case: "GBp" is pence, and "GBP" on a pence price would be 100x off
+  return /^[A-Z]{2}[a-z]$/.test(ccy) ? ccy : ccy.toUpperCase();
 }
 
 /** Price with a precision that suits its size: 186,43 / 3,2896 */
@@ -169,8 +171,10 @@ export function asOfLabel(asOf: string | null | undefined): string {
   if (/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return asOf;
   const d = new Date(asOf);
   if (Number.isNaN(d.getTime())) return asOf;
-  return `${localISODate(d)} ${d.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })}`;
+  return `${localISODate(d)} ${hourMinute.format(d)}`;
 }
+// one formatter for every label: toLocaleTimeString builds a new one per call (slow on a 9,000-bar chart)
+const hourMinute = new Intl.DateTimeFormat(LOCALE, { hour: "2-digit", minute: "2-digit" });
 
 export function localISODate(d: Date = new Date()): string {
   const y = d.getFullYear();

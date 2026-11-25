@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+import logging
 import numbers
 import re
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -19,6 +21,7 @@ BAMOSZ_NAV_URL = "https://www.bamosz.hu/bamosz-public-alapoldal-portlet/kuka.dow
 HTTP_TIMEOUT_SECONDS = 8  # short: a silently dropped connection must not stall the live refresh
 ISIN_RE = re.compile(r"[A-Z]{2}[A-Z0-9]{9}[0-9]")  # always used with fullmatch
 EMPTY_PRICES = ["date", "close", "currency"]
+log = logging.getLogger("lia")
 
 
 def normalize_history(frame: pd.DataFrame) -> pd.DataFrame:
@@ -65,6 +68,64 @@ def download_daily_history(symbol: str, period: str = "5y") -> tuple[pd.DataFram
         return frame, None
     except Exception as exc:  # yfinance errors vary by upstream/network conditions
         return pd.DataFrame(columns=["date", "close", "currency"]), f"Download failed: {exc}"
+
+
+# Intraday chart intervals -> (Yahoo interval, how far back Yahoo serves it). Yahoo gives 1-minute bars for
+# the last ~30 days but at most 7 days per request, 2-90 minute bars for 60 days, hourly for 730 days.
+# "4h" is not a Yahoo interval: it is built from hourly bars.
+INTRADAY = {"1m": ("1m", 7), "5m": ("5m", 59), "15m": ("15m", 59), "30m": ("30m", 59), "1h": ("60m", 729), "4h": ("60m", 729)}
+# Shorter than the browser's 60 s refresh: an entry is stamped when its fetch started, so the next minute's
+# refresh always misses it and gets new bars, while a second tab or a quick back-and-forth is served here.
+INTRADAY_CACHE_SECONDS = 45
+INTRADAY_CACHE_MAX = 64  # a handful of holdings x intervals; never grows without bound
+_intraday_cache: dict[tuple[str, str, int], tuple[float, pd.DataFrame, str]] = {}
+_intraday_lock = threading.Lock()
+
+
+def download_intraday(symbol: str, interval: str, days: int) -> tuple[pd.DataFrame, str | None, str | None]:
+    """(frame of ts (UTC) and close, quote currency, error) for one holding's chart, fetched when asked.
+
+    Sends only the public ticker symbol to Yahoo Finance. Nothing is stored: the bars live in a short
+    in-memory cache, so a chart refreshing every minute costs one request a minute at most."""
+    yahoo_interval, max_days = INTRADAY[interval]
+    days = max(1, min(days, max_days))
+    key = (symbol, interval, days)
+    started = time.monotonic()
+    with _intraday_lock:
+        hit = _intraday_cache.get(key)
+    if hit and started - hit[0] < INTRADAY_CACHE_SECONDS:
+        return hit[1], hit[2], None
+    empty = pd.DataFrame(columns=["ts", "close"])
+    try:
+        tkr = yf.Ticker(symbol)
+        end = pd.Timestamp.now(tz="UTC")
+        # Intraday bars are as traded: Yahoo sends no dividend adjustment for them (the daily ones are adjusted).
+        raw = tkr.history(start=end - pd.Timedelta(days=days), end=end, interval=yahoo_interval,
+                          auto_adjust=True, actions=False, prepost=False)
+        if raw is None or raw.empty or "Close" not in raw.columns:
+            return empty, None, "Yahoo returned no prices for this interval."
+        currency = (tkr.history_metadata or {}).get("currency")
+        if not currency:
+            return empty, None, "Yahoo did not report the quote currency."
+    except Exception as exc:  # yfinance/curl errors are long and technical: log them, show a plain sentence
+        log.warning("intraday download for %s (%s) failed: %s", symbol, interval, exc)
+        return empty, None, "Yahoo Finance could not be reached. Try again in a minute."
+    raw = raw.reset_index()
+    column = "Datetime" if "Datetime" in raw.columns else raw.columns[0]
+    local = pd.to_datetime(raw[column], errors="coerce")  # in the exchange's own time zone
+    frame = pd.DataFrame({"ts": pd.to_datetime(local, utc=True), "close": pd.to_numeric(raw["Close"], errors="coerce"),
+                          "day": local.dt.date}).dropna()
+    if interval == "4h":
+        # Four hourly bars at a time from each trading day's first bar, labelled like every bar by when it
+        # starts: midnight-UTC buckets would put a US stock's open into a bucket labelled two hours earlier.
+        frame["chunk"] = frame.groupby("day").cumcount() // 4
+        frame = frame.groupby(["day", "chunk"], sort=False).agg(ts=("ts", "first"), close=("close", "last")).reset_index()
+    frame = frame[["ts", "close"]].reset_index(drop=True)
+    with _intraday_lock:
+        if key not in _intraday_cache and len(_intraday_cache) >= INTRADAY_CACHE_MAX:
+            _intraday_cache.pop(next(iter(_intraday_cache)), None)
+        _intraday_cache[key] = (started, frame, currency)
+    return frame, currency, None
 
 
 def quote_time(stamp) -> pd.Timestamp | None:
