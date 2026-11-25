@@ -1,3 +1,3 @@
 """Moneylyzer server (FastAPI API, live hub, sign-in)."""
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"

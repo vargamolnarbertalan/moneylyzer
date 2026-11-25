@@ -1,5 +1,8 @@
 # Changelog
 
+## 1.1.1
+- Phones: tapping a form field no longer zooms the page in (iPhone Safari), which also let the page scroll sideways. Pinch-zoom still works.
+
 ## 1.1.0
 - AI analyst knows the app: what each page shows and where each setting lives, and it tells you where to make a change.
 - AI analyst compares banks, brokers, trading apps and the state's own channels (for example Magyar Államkincstár via WebKincstár) in your country, checking fees and terms live with sources; without web access it quotes no fees.

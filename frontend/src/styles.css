@@ -2075,6 +2075,17 @@ input[type="radio"],
   line-height: 1.5;
   min-height: 260px;
 }
+/* iPhone Safari zooms into any field whose text is under 16px and stays zoomed, which also lets the page
+   scroll sideways. On touch screens fields are 16px, so tapping one never zooms. Pinch-zoom itself stays
+   available on purpose: people who need larger text rely on it (WCAG 1.4.4). */
+@media (pointer: coarse) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  textarea,
+  select,
+  .field textarea.mono {
+    font-size: 16px;
+  }
+}
 .field-err {
   color: var(--down);
   font-size: 12px;
