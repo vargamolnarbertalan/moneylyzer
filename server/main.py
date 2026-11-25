@@ -666,6 +666,11 @@ async def claude_logout(user: str = Depends(auth.require_user)):
 
 
 # ---------------------------------------------------------------- AI advisor (any model)
+# An API key is printable ASCII without inner spaces (outer ones are trimmed); anything else would end
+# up in an HTTP header, where urllib raises and the traceback would log the key.
+KEY_PATTERN = r"^\s*[\x21-\x7e]+\s*$"
+
+
 class ProviderBody(BaseModel):
     id: str | None = Field(default=None, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field(min_length=1, max_length=80)
@@ -674,9 +679,17 @@ class ProviderBody(BaseModel):
     base_url: str = Field(default="", max_length=300)
     data_level: Literal["relative", "full"] = "relative"  # ignored: set only via /data-level (full needs confirm)
     web_research: bool = False
-    effort: Literal["low", "medium", "high", "xhigh", "max"] = "high"
-    api_key: str | None = Field(default=None, max_length=500)
+    effort: Literal["default", "low", "medium", "high", "xhigh", "max"] = "high"
+    api_key: str | None = Field(default=None, max_length=500, pattern=KEY_PATTERN)
     clear_key: bool = False
+
+
+class ModelListBody(BaseModel):
+    kind: Literal["anthropic", "openai_compat"]
+    base_url: str = Field(default="", max_length=300)
+    api_key: str | None = Field(default=None, max_length=500, pattern=KEY_PATTERN)
+    # an existing model whose saved key is used when no key is typed
+    provider_id: str | None = Field(default=None, max_length=32, pattern=r"^[A-Za-z0-9_-]+$")
 
 
 class SettingsBody(BaseModel):
@@ -705,6 +718,27 @@ def ai_presets(user: str = Depends(auth.require_user)):
 @app.get("/api/ai/providers")
 def ai_providers(user: str = Depends(auth.require_user)):
     return advisor.list_providers()
+
+
+@app.post("/api/ai/models")
+def ai_models(body: ModelListBody, user: str = Depends(auth.require_user)):
+    """The provider's model list for the Model suggestions; asked for with a button, never automatically."""
+    from analyzer import secrets_store
+    base_url = body.base_url.strip()
+    key = (body.api_key or "").strip() or None
+    if key is None and body.provider_id:
+        try:
+            saved = advisor.get_provider(body.provider_id)
+        except KeyError:
+            raise HTTPException(404, "No such AI model.") from None
+        # A saved key only ever goes where it was saved for: an edited URL or type needs the key typed again.
+        if saved.kind != body.kind or saved.base_url.strip().rstrip("/") != base_url.rstrip("/"):
+            raise HTTPException(400, "The base URL differs from the saved one: type the API key again to list models there.")
+        key = secrets_store.get(saved.secret_name)
+    try:
+        return llm.list_models(body.kind, base_url, key)
+    except llm.LLMError as exc:
+        raise HTTPException(400, str(exc)) from None
 
 
 @app.post("/api/ai/providers")

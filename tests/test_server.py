@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 import json
 
-from analyzer import db
+from analyzer import db, llm
 from server import auth, live
 
 H = {"X-Requested-With": "lia"}
@@ -71,6 +71,31 @@ class ApiTests(unittest.TestCase):
         code = auth._setup_code
         r = self.client.post("/api/auth/setup", json={"username": "owner", "password": "correct horse 1", "code": code}, headers=H)
         self.assertEqual(r.status_code, 200, r.text)
+
+    def test_model_list_uses_typed_or_saved_key(self):
+        self.setup_account()
+        pid = self.client.post("/api/ai/providers", headers=H, json={
+            "name": "API", "kind": "anthropic", "model": "claude-opus-5-5", "api_key": "sk-saved"}).json()["id"]
+        listing = {"models": ["claude-opus-5-5"], "total": 1}
+        with mock.patch("server.main.llm.list_models", return_value=listing) as lm:
+            r = self.client.post("/api/ai/models", headers=H, json={"kind": "anthropic", "provider_id": pid})
+            self.assertEqual(r.json(), listing)
+            self.assertEqual(lm.call_args.args, ("anthropic", "", "sk-saved"))
+            self.client.post("/api/ai/models", headers=H, json={"kind": "anthropic", "provider_id": pid, "api_key": "sk-typed"})
+            self.assertEqual(lm.call_args.args[2], "sk-typed")
+            calls = lm.call_count
+            # The saved key only goes where it was saved for: not to an edited URL, not as another provider type.
+            for moved in ({"kind": "anthropic", "base_url": "https://elsewhere.example.com"},
+                          {"kind": "openai_compat", "base_url": "https://any.example.com/v1"}):
+                r = self.client.post("/api/ai/models", headers=H, json={**moved, "provider_id": pid})
+                self.assertEqual(r.status_code, 400, moved)
+                self.assertIn("type the API key again", r.json()["detail"])
+            self.assertEqual(lm.call_count, calls)
+        self.assertEqual(self.client.post("/api/ai/models", headers=H, json={"kind": "anthropic", "api_key": "sk-a\nb"}).status_code, 422)
+        with mock.patch("server.main.llm.list_models", side_effect=llm.LLMError("nope")):
+            self.assertEqual(self.client.post("/api/ai/models", headers=H, json={"kind": "openai_compat"}).status_code, 400)
+        self.assertEqual(self.client.post("/api/ai/models", headers=H, json={"kind": "claude_code"}).status_code, 422)
+        self.assertEqual(self.client.post("/api/ai/models", json={"kind": "anthropic"}).status_code, 403)  # CSRF header
 
     def test_setup_needs_code_and_happens_once(self):
         self.assertTrue(self.client.get("/api/auth/state").json()["setup_required"])

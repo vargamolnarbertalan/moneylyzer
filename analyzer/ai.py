@@ -76,7 +76,8 @@ def build_command(cli: str, model: str) -> list[str]:
 def cli_environment() -> dict[str, str]:
     env = dict(os.environ)
     # Use the signed-in Claude plan, never a pay-per-token API key that happens to be set.
-    for key in (*BILLING_ENV_VARS, "CLAUDECODE"):
+    # CLAUDE_CODE_EFFORT_LEVEL would outrank --effort: the effort chosen in Settings must win.
+    for key in (*BILLING_ENV_VARS, "CLAUDECODE", "CLAUDE_CODE_EFFORT_LEVEL"):
         env.pop(key, None)
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"  # no CLI telemetry or error reporting
     return env

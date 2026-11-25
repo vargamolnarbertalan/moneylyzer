@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type FormEvent } from "react";
+import { useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { endpoints, errorMessage, type DataLevel, type Effort, type Preset, type Provider, type ProviderInput, type ProviderKind } from "../../api";
 import { Alert } from "../Alert";
 import { Link } from "../../router";
@@ -10,7 +10,17 @@ export const KIND_LABEL: Record<ProviderKind, string> = {
   openai_compat: "OpenAI-compatible",
 };
 
-const EFFORTS: readonly Effort[] = ["low", "medium", "high", "xhigh", "max"];
+const EFFORTS: readonly Effort[] = ["default", "low", "medium", "high", "xhigh", "max"];
+const EFFORT_LABEL: Record<Effort, string> = {
+  default: "Model default",
+  low: "low",
+  medium: "medium",
+  high: "high",
+  xhigh: "xhigh",
+  max: "max",
+};
+const EFFORT_HELP =
+  "How long Claude thinks before answering. Higher is slower and uses more of your plan or API budget. Model default sends no setting and leaves it to the model (usually medium on current Claude models).";
 // Claude Code's own aliases (code.claude.com/docs/en/model-config, checked 2026-11-25); each follows the newest version.
 const CLAUDE_ALIASES = ["opus", "sonnet", "haiku", "fable"];
 const MODEL_HELP: Record<ProviderKind, string> = {
@@ -78,6 +88,10 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
   const [advanced, setAdvanced] = useState(Boolean(provider?.kind === "anthropic" && provider.base_url));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ field: FieldName | null; message: string } | null>(null);
+  // The provider's own model list, loaded on request (a typed name is still allowed).
+  const [listed, setListed] = useState<string[] | null>(null);
+  const [listing, setListing] = useState(false);
+  const [listNote, setListNote] = useState<{ ok: boolean; text: string } | null>(null);
 
   const kind: ProviderKind = provider ? provider.kind : (preset?.kind ?? "openai_compat");
   const effectiveUrl = kind === "openai_compat" || (kind === "anthropic" && advanced) ? baseUrl : "";
@@ -100,6 +114,52 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
     setEffort("high");
     setLevel("relative");
     setError(null);
+    forgetList();
+  };
+
+  // Each request gets a number; an answer for an older one (the URL or provider changed meanwhile) is dropped.
+  const listRequest = useRef(0);
+  const forgetList = () => {
+    listRequest.current += 1;
+    setListed(null);
+    setListNote(null);
+    setListing(false);
+  };
+  const changeUrl = (value: string) => {
+    setBaseUrl(value);
+    forgetList();
+  };
+
+  const listModels = async () => {
+    if (kind === "claude_code") return;
+    const request = ++listRequest.current;
+    setListing(true);
+    setListNote(null);
+    try {
+      const res = await endpoints.listModels({
+        kind,
+        base_url: effectiveUrl.trim(),
+        ...(apiKey.trim() ? { api_key: apiKey.trim() } : {}),
+        ...(provider && !clearKey ? { provider_id: provider.id } : {}),
+      });
+      if (request !== listRequest.current) return;
+      setListed(res.models);
+      const shown = res.models.length;
+      setListNote(
+        shown === 0
+          ? { ok: false, text: "The provider listed no models." }
+          : {
+              ok: true,
+              text:
+                (res.total > shown ? `${res.total} models found; the first ${shown} are suggested.` : `${shown} models found.`) +
+                " Pick one from the Model field's suggestions, or type a name.",
+            },
+      );
+    } catch (err) {
+      if (request === listRequest.current) setListNote({ ok: false, text: errorMessage(err) });
+    } finally {
+      if (request === listRequest.current) setListing(false);
+    }
   };
 
   const submit = async (e: FormEvent) => {
@@ -116,7 +176,7 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
       base_url: effectiveUrl.trim(),
       data_level: level,
       web_research: kind === "openai_compat" ? false : web,
-      effort: kind === "anthropic" ? effort : (provider?.effort ?? "high"),
+      effort: kind === "openai_compat" ? (provider?.effort ?? "high") : effort,
       clear_key: clearKey,
     };
     if (apiKey.trim()) body.api_key = apiKey.trim();
@@ -167,12 +227,23 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
           <label htmlFor={id("model")}>Model</label>
           <input id={id("model")} list={id("models")} value={model} onChange={(e) => setModel(e.target.value)} autoComplete="off" spellCheck={false} aria-describedby={describe("model", id("modelh"))} aria-invalid={fieldError("model") ? true : undefined} />
           <datalist id={id("models")}>
-            {(builtin ? CLAUDE_ALIASES : models).map((m) => (
+            {(listed ?? (kind === "claude_code" ? CLAUDE_ALIASES : models)).map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
           <span id={id("modelh")} className="help">
             {MODEL_HELP[kind]}
+          </span>
+          {kind !== "claude_code" && (
+            <div className="btn-row">
+              <button type="button" className="btn ghost small" onClick={listModels} disabled={listing || busy}>
+                {listing && <span className="spinner" aria-hidden="true" />}
+                {listing ? "Asking the provider…" : "List the provider's models"}
+              </button>
+            </div>
+          )}
+          <span className={listNote && !listNote.ok ? "field-err" : "help"} role="status">
+            {listNote?.text}
           </span>
           {errorText("model")}
         </div>
@@ -180,21 +251,21 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
         {kind === "openai_compat" && (
           <div className="field wide">
             <label htmlFor={id("url")}>Base URL</label>
-            <input id={id("url")} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://api.example.com/v1" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
+            <input id={id("url")} value={baseUrl} onChange={(e) => changeUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://api.example.com/v1" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
             {errorText("base_url")}
           </div>
         )}
         {kind === "anthropic" && (
           <div className="field wide">
             <label className="check">
-              <input type="checkbox" checked={advanced} onChange={(e) => setAdvanced(e.target.checked)} /> Advanced: use a custom base URL
+              <input type="checkbox" checked={advanced} onChange={(e) => { setAdvanced(e.target.checked); forgetList(); }} /> Advanced: use a custom base URL
             </label>
             {advanced && (
               <>
                 <label className="sr-only" htmlFor={id("url")}>
                   Base URL
                 </label>
-                <input id={id("url")} value={baseUrl} onChange={(e) => setBaseUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://…" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
+                <input id={id("url")} value={baseUrl} onChange={(e) => changeUrl(e.target.value)} autoComplete="off" spellCheck={false} placeholder="https://…" aria-describedby={describe("base_url")} aria-invalid={fieldError("base_url") ? true : undefined} />
                 {errorText("base_url")}
               </>
             )}
@@ -218,16 +289,19 @@ export function ProviderForm({ mode, provider, presets, onSaved, onCancel }: Pro
           </div>
         )}
 
-        {kind === "anthropic" && (
+        {kind !== "openai_compat" && (
           <div className="field">
             <label htmlFor={id("effort")}>Effort</label>
             <Select
               id={id("effort")}
               value={effort}
               onValueChange={(v) => setEffort(v as Effort)}
-              aria-describedby={describe("effort")}
-              options={EFFORTS.map((x) => ({ value: x, label: x }))}
+              aria-describedby={describe("effort", id("efforth"))}
+              options={EFFORTS.map((x) => ({ value: x, label: EFFORT_LABEL[x] }))}
             />
+            <span id={id("efforth")} className="help">
+              {EFFORT_HELP}
+            </span>
             {errorText("effort")}
           </div>
         )}

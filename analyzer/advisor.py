@@ -49,10 +49,15 @@ def init_tables() -> None:
         )
         # The subscription login is the first-class route and always exists.
         conn.execute(
-            "INSERT OR IGNORE INTO ai_providers(id, name, kind, model, web_research, is_default) "
-            "VALUES (?, 'Claude (subscription login)', 'claude_code', 'opus', 1, 1)",
+            "INSERT OR IGNORE INTO ai_providers(id, name, kind, model, web_research, effort, is_default) "
+            "VALUES (?, 'Claude (subscription login)', 'claude_code', 'opus', 1, 'default', 1)",
             (BUILTIN_ID,),
         )
+        # Before effort reached Claude Code, Claude login rows stored "high" that was never applied: answers ran
+        # at the model's default. Once, make that explicit, so they keep running as they did.
+        if conn.execute("SELECT 1 FROM ai_settings WHERE key = 'claude_login_effort_default'").fetchone() is None:
+            conn.execute("UPDATE ai_providers SET effort = 'default' WHERE kind = 'claude_code'")
+            conn.execute("INSERT INTO ai_settings(key, value) VALUES ('claude_login_effort_default', '1')")
         if conn.execute("SELECT count(*) FROM ai_providers WHERE is_default = 1").fetchone()[0] == 0:
             conn.execute("UPDATE ai_providers SET is_default = 1 WHERE id = ?", (BUILTIN_ID,))
 
