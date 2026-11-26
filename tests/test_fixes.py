@@ -26,8 +26,7 @@ class YahooDateTests(unittest.TestCase):
 
 class HoldingsValidationTests(unittest.TestCase):
     def frame(self, **overrides):
-        row = {"instrument_id": "HU0000123456", "name": "Bond", "asset_type": "government_bond",
-               "quantity": 1000, "currency": "HUF", "avg_cost": None}
+        row = {"instrument_id": "HU0000123456", "name": "Bond", "asset_type": "government_bond", "currency": "HUF"}
         row.update(overrides)
         return pd.DataFrame([row])
 
@@ -41,10 +40,15 @@ class HoldingsValidationTests(unittest.TestCase):
 
     def test_valid_row_defaults(self):
         row = validate_holdings(self.frame())[0]
-        self.assertIsNone(row["avg_cost"])
         self.assertIsNone(row["market_symbol"])
         self.assertEqual(row["price_divisor"], 1.0)
         self.assertEqual(row["notes"], "")
+
+    def test_units_and_cost_are_not_part_of_the_holdings_file(self):
+        # owner decision 2026-11-26: they come only from buys and sells (the transactions file)
+        for extra in ({"quantity": 10}, {"avg_cost": 2.5}):
+            with self.subTest(extra=extra), self.assertRaisesRegex(ValueError, "no longer takes"):
+                validate_holdings(self.frame(**extra))
 
 
 class YahooCurrencyTests(unittest.TestCase):
@@ -333,7 +337,7 @@ class CommodityMigrationTests(unittest.TestCase):
 class CommodityRulesTests(unittest.TestCase):
     def test_commodity_csv_row_and_signal(self):
         row = validate_holdings(pd.DataFrame([{"instrument_id": "XAU", "name": "Gold", "asset_type": "commodity",
-                                               "quantity": 0.25, "currency": "usd", "market_symbol": "GC=F"}]))[0]
+                                               "currency": "usd", "market_symbol": "GC=F"}]))[0]
         self.assertEqual((row["asset_type"], row["currency"]), ("commodity", "USD"))
         from analyzer.engine import analyze_history
         dates = pd.date_range("2025-01-01", periods=260, freq="B")

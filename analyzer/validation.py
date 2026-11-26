@@ -20,19 +20,26 @@ def _text(value) -> str:
     return "" if _blank(value) else str(value).encode("utf-8", "ignore").decode("utf-8").strip()
 
 
+HOLDINGS_HEADER = "instrument_id,name,asset_type,currency,market_symbol,price_divisor,notes"
+
+
 def validate_holdings(frame: pd.DataFrame) -> list[dict]:
-    required = {"instrument_id", "name", "asset_type", "quantity", "currency"}
+    """Holdings CSV: what each holding is. Its units and cost come from its transactions (the transactions CSV), so
+    a file with quantity or avg_cost columns is refused rather than half-read (owner decision 2026-11-26)."""
+    required = {"instrument_id", "name", "asset_type", "currency"}
     missing = required - set(frame.columns)
     if missing == required:
-        raise ValueError(
-            "the first line must be the header row: "
-            "instrument_id,name,asset_type,quantity,avg_cost,currency,market_symbol,price_divisor,notes "
-            "(comma-separated, as in the template)"
-        )
+        raise ValueError(f"the first line must be the header row: {HOLDINGS_HEADER} (comma-separated, as in the template)")
+    # however the header spells them ("Quantity", "avg cost"): a file that still carries units must not import
+    # with them silently dropped
+    stale = sorted(str(c) for c in frame.columns if re.sub(r"[\s_]", "", str(c).lower()) in ("quantity", "avgcost"))
+    if stale:
+        raise ValueError(f"the holdings file no longer takes {' and '.join(stale)}: units and cost come from buys and "
+                         "sells. Import them with the transactions CSV, and remove these columns from this file.")
     if missing:
         raise ValueError("Holdings CSV is missing columns: " + ", ".join(sorted(missing)))
     clean = frame.copy()
-    optional_defaults = {"avg_cost": None, "market_symbol": None, "price_divisor": 1, "notes": ""}
+    optional_defaults = {"market_symbol": None, "price_divisor": 1, "notes": ""}
     for col, default in optional_defaults.items():
         if col not in clean.columns:
             clean[col] = default
@@ -54,14 +61,11 @@ def _validate_row(row: dict) -> dict:
         raise ValueError("instrument_id, name and currency must not be empty")
     if row["asset_type"] not in ASSET_TYPE_CODES:
         raise ValueError(f"Unsupported asset_type '{row['asset_type']}' for {row['instrument_id']}. Use: {', '.join(ASSET_TYPE_CODES)}.")
-    row["quantity"] = float(row["quantity"])
     if pd.isna(row.get("price_divisor")) or row.get("price_divisor") in (None, ""):
         row["price_divisor"] = 1
     row["price_divisor"] = float(row["price_divisor"])
-    if pd.isna(row["quantity"]) or row["quantity"] < 0 or pd.isna(row["price_divisor"]) or row["price_divisor"] <= 0:
-        raise ValueError("quantity must be non-negative and price_divisor must be greater than zero")
-    avg_cost = _text(row.get("avg_cost"))
-    row["avg_cost"] = float(avg_cost) if avg_cost else None
+    if pd.isna(row["price_divisor"]) or row["price_divisor"] <= 0:
+        raise ValueError("price_divisor must be greater than zero")
     row["market_symbol"] = _text(row.get("market_symbol")) or None
     row["notes"] = "" if _blank(row.get("notes")) else row["notes"]
     return row

@@ -141,7 +141,7 @@ export function Purchases({ instrumentId, currency, base, lots, onChanged }: Pur
       {lots.length === 0 ? (
         <div className="empty">
           <b>No transactions recorded yet</b>
-          Add each buy and sell (date, units, price, what you paid or received) to see P/L from your own figures. Until then the average cost from your holding record is used.
+          Add each buy and sell (date, units, price, what you paid or received): the holding's units, cost and P/L come from them.
         </div>
       ) : (
         <DataTable
@@ -283,7 +283,7 @@ function AddPurchase({ instrumentId, currency, base, onAdded, focusFirst = false
           <Segmented label="Transaction type" options={SIDES} value={side} onChange={setSide} />
         </div>
       ) : (
-        <p className="help">This holding's units come from its holding record. Record its purchases first, then the sale.</p>
+        <p className="help">This holding has no buys yet: record a buy first, then the sale.</p>
       )}
       <div className="form-grid">
         <div className="field">

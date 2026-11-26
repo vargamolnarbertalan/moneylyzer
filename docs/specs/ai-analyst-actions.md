@@ -73,13 +73,17 @@ same way.
 | `rules.add` / `rules.remove` | rule text; remove by number (1-based) and text | `PUT /api/ai/settings` with `rules_expected` |
 | `preferences.update` | any of horizon, risk, language, country; `notes_add` (≤ 300 chars) appends to the notes, which a card can never shorten or replace (built 2026-11-26) | `PUT /api/ai/settings` with only those keys (the server merges) |
 | `settings.base_currency` | currency | `PUT /api/settings` |
-| `holding.update` | name, asset type, notes; quantity / avg cost only for a holding without purchases | `POST /api/instruments?update=1` |
+| `holding.update` | name, asset type, notes (units and cost never: owner decision 2026-11-26, they come only from buys and sells) | `POST /api/instruments?update=1` |
 | `purchase.add` | date, quantity, unit price (quote units), paid amount/currency (default: the holding's), platform | `POST /api/lots`; the card shows the unit and the resulting position, and warns when it is the first purchase of a holding without purchases |
 | `holding.delete` / `purchase.delete` | the item | existing delete endpoints, behind the app's two-step confirm |
 
 A new holding is a card too (`holding.add`: name, type, symbol checked against Yahoo or the fund feed, which sets
-the currency and price divisor, or a currency without a symbol; units and average cost). Owner decision 2026-11-26:
-imports need it.
+the currency and price divisor, or a currency without a symbol; and its first buy: units, price, amount paid,
+platform, date). Owner decisions 2026-11-26: imports need it; units and cost come only from buys and sells, so the
+holding and its buy are saved together (`POST /api/instruments?create=1` with `buy`, both or neither). A trade
+without a full date carries `needs_date`: the card shows a date field (its `date` row, never compared) and sends
+the picked date with the payload; Apply all skips it until then. Old holdings with units on their record are
+turned into one buy each from the Holdings page (`POST /api/instruments/{id}/record-to-buy`).
 
 **Many cards:** at most 5 per answer, or 25 when the question has files attached (an import). "Apply all" applies
 the pending cards in order, each re-checked like its own Apply, and stops at the first that fails or changed;

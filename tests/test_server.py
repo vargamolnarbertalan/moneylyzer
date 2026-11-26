@@ -128,7 +128,7 @@ class ApiTests(unittest.TestCase):
         nl = chr(10)
         blocks = [nl.join(["```moneylyzer-proposal",
                            json.dumps({"type": "holding.add", "name": f"Fund {i}", "asset_type": "mutual_fund", "currency": "HUF",
-                                       "quantity": i + 1, "avg_cost": 1000, "reason": "From your screenshot."}), "```"])
+                                       "quantity": i + 1, "unit_price": 1000, "date": "2025-03-03", "reason": "From your screenshot."}), "```"])
                   for i in range(7)]
         result = {"text": "Seven positions." + nl + nl + nl.join(blocks), "model": "m", "sources": []}
         note = base64.b64encode(b"Fund 0 1 unit").decode()
@@ -145,6 +145,67 @@ class ApiTests(unittest.TestCase):
         again = self.client.post("/api/advisor/proposals/preview", headers=H, json={"type": card["type"], "payload": card["payload"]}).json()
         self.assertIs(again["ok"], False)  # a second Apply (another tab) adds no second holding by the same name
         self.assertIn("already have a holding with that name", again["reason"])
+        # the holding came with its buy, in one step: units from the transaction, none on the record
+        lots = [(l["instrument_id"], l["buy_date"], l["quantity"], l["unit_price"]) for l in self.client.get("/api/lots").json()]
+        self.assertEqual(lots, [("FUND-0", "2025-03-03", 1.0, 1000.0)])
+        self.assertEqual(self.client.post("/api/instruments?create=1", headers=H, json=prev["apply"]).status_code, 409)
+        self.assertEqual(len(self.client.get("/api/lots").json()), 1)  # a refused create adds no buy either
+
+    def test_units_and_cost_come_only_from_buys_and_sells(self):
+        self.setup_account()
+        body = {"instrument_id": "A", "name": "A", "asset_type": "stock", "currency": "EUR", "quantity": 10, "avg_cost": 5}
+        self.client.post("/api/instruments?create=1", json=body, headers=H).raise_for_status()
+        self.client.post("/api/instruments?update=1", json={**body, "name": "A2", "quantity": 99}, headers=H).raise_for_status()
+        (a,) = self.client.get("/api/instruments").json()
+        self.assertEqual((a["name"], a["quantity"], a["avg_cost"], a["record_only"]), ("A2", 0.0, None, False))
+        buy = {"buy_date": "2025-01-02", "quantity": 1, "unit_price": 5}
+        self.assertEqual(self.client.post("/api/instruments?update=1", json={**body, "buy": buy}, headers=H).status_code, 400)
+        r = self.client.post("/api/instruments?create=1", json={**body, "instrument_id": "B", "buy": {**buy, "unit_price": 0}}, headers=H)
+        self.assertEqual(r.status_code, 400)  # a buy without a price or amount paid: neither holding nor buy is stored
+        self.assertEqual([i["instrument_id"] for i in self.client.get("/api/instruments").json()], ["A"])
+
+    def test_an_old_holdings_units_turn_into_a_buy_once(self):
+        self.setup_account()
+        db.upsert_instrument({"instrument_id": "OLD", "name": "Old", "asset_type": "etf", "quantity": 12.5, "avg_cost": 9.86,
+                              "currency": "EUR"})  # as holdings were stored before 2026-11-26
+        self.assertTrue(self.client.get("/api/instruments").json()[0]["record_only"])
+        url = "/api/instruments/OLD/record-to-buy"
+        self.assertEqual(self.client.post(url, json={"buy_date": "2999-01-01"}, headers=H).status_code, 400)
+        self.assertEqual(self.client.post(url, json={"buy_date": "2026-01-02", "platform": "Revolut"}, headers=H).json(), {"ok": True})
+        (lot,) = self.client.get("/api/lots").json()
+        self.assertEqual((lot["buy_date"], lot["side"], lot["quantity"], lot["unit_price"], lot["platform"]),
+                         ("2026-01-02", "buy", 12.5, 9.86, "Revolut"))
+        (old,) = self.client.get("/api/instruments").json()
+        self.assertEqual((old["quantity"], old["avg_cost"], old["record_only"]), (0.0, None, False))
+        self.assertEqual(self.client.post(url, json={"buy_date": "2026-01-02"}, headers=H).status_code, 409)  # once only
+        db.upsert_instrument({"instrument_id": "NOCOST", "name": "No cost", "asset_type": "etf", "quantity": 3, "currency": "EUR"})
+        r = self.client.post("/api/instruments/NOCOST/record-to-buy", json={"buy_date": "2026-01-02"}, headers=H)
+        self.assertEqual((r.status_code, "price per unit" in r.json()["detail"]), (409, True))
+        r = self.client.post("/api/instruments/NOCOST/record-to-buy", json={"buy_date": "2026-01-02", "unit_price": 4}, headers=H)
+        self.assertEqual(r.status_code, 200)
+
+    def test_buys_only_review_fixes(self):
+        self.setup_account()
+        # a recorded cost is used, never overridden; an infinite price never stored
+        db.upsert_instrument({"instrument_id": "C", "name": "C", "asset_type": "etf", "quantity": 2, "avg_cost": 7, "currency": "EUR"})
+        url = "/api/instruments/C/record-to-buy"
+        r = self.client.post(url, json={"buy_date": "2026-01-02", "unit_price": 9}, headers=H)
+        self.assertEqual(r.status_code, 409)
+        r = self.client.post(url, content=b'{"buy_date": "2026-01-02", "unit_price": Infinity}',
+                             headers={**H, "Content-Type": "application/json"})
+        self.assertEqual((r.status_code, r.json()["detail"]), (400, "The price per unit must be a finite number."))
+        self.assertEqual(self.client.post(url, json={"buy_date": "2026-01-02"}, headers=H).status_code, 200)
+        # the holdings CSV: units however the header spells them; no new currency for a holding with transactions
+
+        def upload(text):
+            return self.client.post("/api/import/holdings", files={"file": ("h.csv", io.BytesIO(text.encode()), "text/csv")}, headers=H)
+        r = upload("instrument_id,name,asset_type,currency,Quantity\nX,X,etf,EUR,5\n")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("no longer takes Quantity", r.json()["detail"])
+        r = upload("instrument_id,name,asset_type,currency\nC,C,etf,USD\n")
+        self.assertEqual((r.status_code, r.json()["detail"]),
+                         (400, "CSV line 2: C has transactions: its currency and price divisor cannot change."))
+        self.assertEqual(upload("instrument_id,name,asset_type,currency\nC,C renamed,etf,EUR\n").json(), {"imported": 1})
 
     def test_a_failed_card_check_costs_only_the_cards(self):
         self.setup_account()
@@ -515,16 +576,17 @@ class ApiTests(unittest.TestCase):
 
     def test_portfolio_flow(self):
         self.setup_account()
-        csv = ("instrument_id,name,asset_type,quantity,avg_cost,currency,market_symbol,price_divisor,notes\n"
-               "SEC0,iShares Semis,etf,100,,EUR,SEC0.DE,1,\n"
-               "OTP-B,OTP fund,mutual_fund,1000000,2.9,HUF,fund:HU0000728670,1,\n")
+        csv = ("instrument_id,name,asset_type,currency,market_symbol,price_divisor,notes\n"
+               "SEC0,iShares Semis,etf,EUR,SEC0.DE,1,\n"
+               "OTP-B,OTP fund,mutual_fund,HUF,fund:HU0000728670,1,\n")
         r = self.client.post("/api/import/holdings", files={"file": ("h.csv", io.BytesIO(csv.encode()), "text/csv")}, headers=H)
         self.assertEqual(r.json(), {"imported": 2}, r.text)
-        lots = "instrument_id,buy_date,quantity,unit_price,cost_huf,notes\nSEC0,2025-03-03,100,10,,\n"
+        lots = ("instrument_id,buy_date,quantity,unit_price,cost_huf,notes\nSEC0,2025-03-03,100,10,,\n"
+                "OTP-B,2025-03-03,1000000,2.9,,\n")  # units and cost come from transactions only
         r = self.client.post("/api/import/lots", files={"file": ("l.csv", io.BytesIO(lots.encode()), "text/csv")}, headers=H)
-        self.assertEqual(r.json(), {"added": 1, "skipped_duplicates": 0})
+        self.assertEqual(r.json(), {"added": 2, "skipped_duplicates": 0})
         r = self.client.post("/api/import/lots", files={"file": ("l.csv", io.BytesIO(lots.encode()), "text/csv")}, headers=H)
-        self.assertEqual(r.json(), {"added": 0, "skipped_duplicates": 1})
+        self.assertEqual(r.json(), {"added": 0, "skipped_duplicates": 2})
 
         snap = self.client.post("/api/portfolio/refresh", headers=H).json()
         rows = {r["id"]: r for r in snap["rows"]}
@@ -656,9 +718,10 @@ class ApiTests(unittest.TestCase):
 
     def test_record_only_holdings_and_csv_files_in_any_order(self):
         self.setup_account()
-        record = "This holding's units come from its holding record. Record its purchases first, then the sale."
-        self.client.post("/api/instruments", json={"instrument_id": "R", "name": "R", "asset_type": "stock", "quantity": 10,
-                                                   "avg_cost": 100, "currency": "EUR"}, headers=H).raise_for_status()
+        record = ("This holding's units are on its record without a buy: turn them into a buy on the Holdings page first, "
+                  "then the sale.")
+        db.upsert_instrument({"instrument_id": "R", "name": "R", "asset_type": "stock", "quantity": 10, "avg_cost": 100,
+                              "currency": "EUR"})  # an old holding: units on its record (before 2026-11-26)
         sale = {"instrument_id": "R", "side": "sell", "buy_date": "2025-04-03", "quantity": 4, "unit_price": 8}
         r = self.client.post("/api/lots", json=sale, headers=H)
         self.assertEqual((r.status_code, r.json()["detail"]), (400, record))     # the page shows 10 units, not 0
@@ -668,10 +731,14 @@ class ApiTests(unittest.TestCase):
         head = "instrument_id,buy_date,side,quantity,unit_price\n"
         r = upload(head + "R,2025-01-02,buy,1,5\nR,2025-04-03,sell,1,8\nR,2025-04-04,buy,1,5\n")
         self.assertEqual(r.status_code, 200, r.text)                              # a purchase in the file is enough
-        self.client.post("/api/instruments", json={"instrument_id": "S", "name": "S", "asset_type": "stock", "quantity": 10,
-                                                   "currency": "EUR"}, headers=H).raise_for_status()
+        # its first transactions replaced the record for good: deleting them later can't bring the 10 units back
+        r_row = next(i for i in self.client.get("/api/instruments").json() if i["instrument_id"] == "R")
+        self.assertEqual((r_row["quantity"], r_row["avg_cost"], r_row["record_only"]), (0.0, None, False))
+        self.client.post("/api/instruments?create=1", json={"instrument_id": "S", "name": "S", "asset_type": "stock",
+                                                            "currency": "EUR"}, headers=H).raise_for_status()
         r = upload(head + "S,2025-01-02,sell,1,8\n")
-        self.assertEqual((r.status_code, r.json()["detail"]), (400, "CSV line 2: " + record))
+        self.assertEqual((r.status_code, r.json()["detail"]),
+                         (400, "CSV line 2: This holding has no buys yet: record a buy first, then the sale."))
 
         self.client.post("/api/instruments", json={"instrument_id": "A", "name": "A", "asset_type": "stock", "quantity": 0,
                                                    "currency": "EUR"}, headers=H).raise_for_status()

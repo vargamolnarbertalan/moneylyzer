@@ -405,7 +405,7 @@ class SellStorageTests(TempDb):
         with self.assertRaises(db.SaleTooLarge) as caught:     # the page shows 10 units: "you held 0" would be wrong
             db.add_lots([sale])
         self.assertIsInstance(caught.exception, db.NoPurchases)
-        self.assertEqual(str(caught.exception), "This holding's units come from its holding record. Record its purchases first, then the sale.")
+        self.assertEqual(str(caught.exception), "This holding's units are on its record without a buy: turn them into a buy on the Holdings page first, then the sale.")
         self.assertEqual(db.count_lots("R"), 0)
         self.assertEqual(db.add_lots([dict(sale, side="buy", buy_date="2026-10-01"), sale]), (2, 0))  # a purchase in the same call is enough
 

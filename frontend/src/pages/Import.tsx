@@ -116,10 +116,10 @@ export function ImportPage() {
         <ImportCard<{ imported: number }>
           step={1}
           title="Holdings CSV"
-          blurb="Adds new holdings and updates existing ones with the same instrument_id."
+          blurb="What each holding is: adds new ones and updates existing ones with the same instrument_id. Units and cost come from the transactions CSV, never from this file."
           endpoint="/api/import/holdings"
           template="/api/templates/holdings.csv"
-          header="instrument_id,name,asset_type,quantity,avg_cost,currency,market_symbol,price_divisor,notes"
+          header="instrument_id,name,asset_type,currency,market_symbol,price_divisor,notes"
           describe={(r) => `Imported ${plural(r.imported, "holding", "holdings")}.`}
         />
         <ImportCard<{ added: number; skipped_duplicates: number }>

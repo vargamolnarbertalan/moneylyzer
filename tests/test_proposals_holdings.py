@@ -49,25 +49,48 @@ def one(obj, st=None):
 class HoldingAddTests(unittest.TestCase):
     def test_a_new_holding_takes_currency_and_divisor_from_its_symbol(self):
         card, notes = one({"type": "holding.add", "name": "Vanguard S&P 500", "asset_type": "etf", "symbol": "VUSA.L",
-                           "quantity": 12, "avg_cost": 7512.5})
+                           "quantity": 12, "unit_price": 7512.5, "date": "2025-03-03", "platform": "Revolut"})
         self.assertEqual(notes, [])
-        self.assertEqual(card["apply"], {"instrument_id": "VUSA", "name": "Vanguard S&P 500", "asset_type": "etf", "quantity": 12.0,
-                                         "avg_cost": 7512.5, "currency": "GBP", "market_symbol": "VUSA.L", "price_divisor": 100.0})
+        # units and cost only through its first buy, stored with it (owner decision 2026-11-26)
+        self.assertEqual(card["apply"], {"instrument_id": "VUSA", "name": "Vanguard S&P 500", "asset_type": "etf",
+                                         "currency": "GBP", "market_symbol": "VUSA.L", "price_divisor": 100.0, "notes": None,
+                                         "buy": {"buy_date": "2025-03-03", "quantity": 12.0, "unit_price": 7512.5,
+                                                 "paid_amount": None, "paid_currency": None, "platform": "Revolut"}})
         rows = {r["label"]: r["after"] for r in card["changes"]}
         self.assertEqual(rows["Currency"], "GBP, prices in GBp (100 = 1 GBP)")
-        self.assertEqual(rows["Average cost per unit"], "7 512,5 GBp (100 = 1 GBP)")
+        self.assertEqual(rows["Price per unit"], "7 512,5 GBp (100 = 1 GBP)")
+        self.assertEqual(card["summary"], "Add the holding Vanguard S&P 500 with a buy of 12")
         self.assertNotIn("confirm", card)  # 7 512,5 pence against a price of 9 000 pence: plausible
+        self.assertNotIn("needs_date", card)
+
+    def test_a_buy_without_a_date_leaves_it_to_the_user(self):
+        # a Revolut confirmation shows "január 2." without a year: the card asks for the date instead of guessing
+        obj = {"type": "holding.add", "name": "iShares Semiconductors", "asset_type": "etf", "symbol": "VWCE.DE",
+               "quantity": 395.45731089, "unit_price": 9.86, "paid_amount": 3900}
+        card, _ = one(obj)
+        self.assertTrue(card["needs_date"])
+        self.assertEqual(card["changes"][4], {"label": "Date", "before": None, "after": "pick the date below", "date": True})
+        self.assertIsNone(card["apply"]["buy"]["buy_date"])
+        picked = proposals.preview("holding.add", {**card["payload"], "date": "2026-01-02"}, state())
+        self.assertEqual((picked["apply"]["buy"]["buy_date"], picked["apply"]["buy"]["paid_currency"]), ("2026-01-02", "EUR"))
+        self.assertEqual(proposals.preview("holding.add", {**card["payload"], "date": "2999-01-01"}, state())["ok"], False)
+
+    def test_a_holding_without_units_has_no_buy(self):
+        card, _ = one({"type": "holding.add", "name": "Watch", "asset_type": "stock", "currency": "USD"})
+        self.assertNotIn("buy", card["apply"])
+        card, notes = one({"type": "holding.add", "name": "Watch", "asset_type": "stock", "currency": "USD", "unit_price": 5})
+        self.assertIn("without the number of units", notes[0])
 
     def test_a_cost_far_from_the_price_asks_first(self):
         # 12 000 for an ETF trading at 120: forints, or pence, typed as euros; the card says so and asks
         card, _ = one({"type": "holding.add", "name": "Vanguard All-World", "asset_type": "etf", "symbol": "VWCE.DE",
-                       "quantity": 3, "avg_cost": 12000})
+                       "quantity": 3, "unit_price": 12000})
         check = next(r for r in card["changes"] if r["label"] == "Check")
         self.assertIn("over 30 times off", check["after"])
         self.assertNotIn("120", check["after"])  # no live price in the text: the card must re-check as the same
         self.assertIn("Apply it?", card["confirm"])
         card, _ = one({"type": "holding.add", "name": "Vanguard All-World", "asset_type": "etf", "symbol": "VWCE.DE",
-                       "quantity": 3, "avg_cost": 110})
+                       "quantity": 3, "unit_price": 110})
         self.assertNotIn("confirm", card)
 
     def test_a_price_unit_is_not_a_currency(self):
@@ -96,7 +119,8 @@ class HoldingAddTests(unittest.TestCase):
             ({"name": "otp bank", "asset_type": "stock", "currency": "HUF"}, "already have a holding with that name"),
             ({"name": "Private fund", "asset_type": "mutual_fund"}, "needs its currency"),
             ({"name": "Thing", "asset_type": "crypto", "currency": "USD"}, "type Moneylyzer doesn't have"),
-            ({"name": "Thing", "asset_type": "stock", "currency": "USD", "quantity": -1}, "at least 0"),
+            ({"name": "Thing", "asset_type": "stock", "currency": "USD", "quantity": -1, "unit_price": 1}, "more than 0"),
+            ({"name": "Thing", "asset_type": "stock", "currency": "USD", "quantity": 1}, "neither a price"),
         ):
             with self.subTest(why=why):
                 card, notes = one({"type": "holding.add", **obj})
@@ -109,25 +133,23 @@ class HoldingAddTests(unittest.TestCase):
 
 
 class HoldingUpdateTests(unittest.TestCase):
-    def test_units_and_cost_only_for_a_holding_without_transactions(self):
-        card, notes = one({"type": "holding.update", "holding": "OTP", "changes": {"quantity": 8, "avg_cost": 21000}})
-        self.assertEqual(notes, [])
-        self.assertEqual((card["apply"]["quantity"], card["apply"]["avg_cost"], card["apply"]["notes"]), (8.0, 21000.0, "Long term."))
-        self.assertEqual(card["changes"][0], {"label": "Units", "before": "5", "after": "8"})
-        card, notes = one({"type": "holding.update", "holding": "AAPL", "changes": {"quantity": 12}})
-        self.assertIsNone(card)
-        self.assertIn("add a transaction instead", notes[0])
+    def test_units_and_cost_never_change_on_their_own(self):
+        for changes in ({"quantity": 8}, {"avg_cost": 21000}):
+            with self.subTest(changes=changes):
+                card, notes = one({"type": "holding.update", "holding": "OTP", "changes": changes})
+                self.assertIsNone(card)
+                self.assertIn("only from buys and sells", notes[0])
 
     def test_what_loses_or_overwrites_something_asks_first(self):
-        for changes, careful in (({"quantity": 8}, None), ({"quantity": 3}, "lowers the units"),
-                                 ({"avg_cost": 21000}, "replaces the average cost"), ({"name": "OTP Nyrt."}, "renames"),
-                                 ({"asset_type": "etf"}, None), ({"notes_add": "Dividend payer."}, "AI analyst reads")):
+        for changes, careful in (({"name": "OTP Nyrt."}, "renames"), ({"asset_type": "etf"}, None),
+                                 ({"notes_add": "Dividend payer."}, "AI analyst reads")):
             with self.subTest(changes=changes):
                 card, _ = one({"type": "holding.update", "holding": "OTP", "changes": changes})
                 if careful:
                     self.assertIn(careful, card["confirm"])
                 else:
                     self.assertNotIn("confirm", card)
+                self.assertNotIn("quantity", card["apply"])  # a description save never carries units
         card, notes = one({"type": "holding.update", "holding": "OTP", "changes": {"name": "apple"}})
         self.assertIn("another holding already has that name", notes[0])
 
@@ -255,7 +277,7 @@ class DeleteTests(unittest.TestCase):
 class ImportTests(unittest.TestCase):
     def test_an_import_may_hold_25_cards_a_plain_answer_5(self):
         many = "".join(block({"type": "holding.add", "name": f"Fund {i}", "asset_type": "mutual_fund", "currency": "HUF",
-                              "quantity": i + 1, "reason": "From your screenshot."}) for i in range(30))
+                              "quantity": i + 1, "unit_price": 1000, "reason": "From your screenshot."}) for i in range(30))
         self.assertEqual(len(proposals.parse(many, state())[1]), 5)
         _, cards, notes = proposals.parse(many, state(), proposals.MAX_IMPORT_PROPOSALS)
         self.assertEqual(len(cards), 25)
@@ -393,9 +415,10 @@ class AnswerOrderTests(unittest.TestCase):
 class ShownValueTests(unittest.TestCase):
     def test_costs_and_prices_carry_their_unit(self):
         st = state()
-        st["holdings"]["OTP"].update(currency="GBP", price_divisor=100.0, avg_cost=None)
-        card, _ = one({"type": "holding.update", "holding": "OTP", "changes": {"avg_cost": 75.12}}, st)
-        self.assertEqual(card["changes"][0], {"label": "Average cost per unit", "before": "none", "after": "75,12 GBp (100 = 1 GBP)"})
+        st["holdings"]["AAPL"].update(currency="GBP", price_divisor=100.0)
+        card, _ = one({"type": "purchase.add", "holding": "AAPL", "side": "buy", "date": "2025-03-03", "quantity": 1,
+                       "unit_price": 75.12}, st)
+        self.assertIn({"label": "Price per unit", "before": None, "after": "75,12 GBp (100 = 1 GBP)"}, card["changes"])
         card, _ = one({"type": "purchase.delete", "holding": "AAPL", "date": "2024-01-02", "side": "buy", "quantity": 10})
         self.assertEqual(card["changes"][0]["before"], "Buy of 10 on 2024-01-02 at 180 USD")
 
@@ -445,13 +468,14 @@ class ReviewCycleTwoTests(unittest.TestCase):
 
     def test_a_cost_or_price_far_off_the_last_price_asks_first(self):
         st = state()
-        st["holdings"]["OTP"].update(currency="GBP", price_divisor=100.0, avg_cost=None, last_price=7500.0)
-        card, _ = one({"type": "holding.update", "holding": "OTP", "changes": {"avg_cost": 75.12}}, st)  # pounds, not pence
+        st["holdings"]["AAPL"].update(currency="GBP", price_divisor=100.0, last_price=7500.0)
+        trade = {"type": "purchase.add", "holding": "AAPL", "side": "buy", "date": "2025-03-03", "quantity": 1}
+        card, _ = one({**trade, "unit_price": 75.12}, st)  # pounds, not pence
         self.assertIn("over 30 times off the last price", card["confirm"])
         self.assertTrue(any(r["label"] == "Check" for r in card["changes"]))
-        card, _ = one({"type": "holding.update", "holding": "OTP", "changes": {"avg_cost": 7400}}, st)
+        card, _ = one({**trade, "unit_price": 7400}, st)
         self.assertNotIn("confirm", card)
-        st["holdings"]["AAPL"]["last_price"] = 200.0
+        st["holdings"]["AAPL"].update(currency="USD", price_divisor=1.0, last_price=200.0)
         card, _ = one({"type": "purchase.add", "holding": "AAPL", "side": "buy", "date": "2025-03-03", "quantity": 1,
                        "unit_price": 20000}, st)
         self.assertIn("price per unit over 30 times off", card["confirm"])
@@ -536,6 +560,27 @@ class ReviewCycleThreeTests(unittest.TestCase):
         down = block({"type": "holding.add", "name": "Down", "asset_type": "etf", "symbol": "DOWN.DE", "reason": "x"})
         _, cards, notes = proposals.parse(down + down, state())
         self.assertEqual((cards, len(notes)), ([], 1))
+
+
+class BuysOnlyTests(unittest.TestCase):
+    """Units and cost only from buys and sells (owner decision 2026-11-26): the review of that change."""
+
+    def test_two_undated_trades_stay_two_cards(self):
+        # "jan. 2: buy 10 @ 180" and "febr. 3: buy 10 @ 180" without a year look alike until the user dates them
+        trade = {"type": "purchase.add", "holding": "AAPL", "side": "buy", "quantity": 10, "unit_price": 180, "reason": "x"}
+        _, cards, notes = proposals.parse(block(trade) + block(trade), state())
+        self.assertEqual((len(cards), notes), (2, []))
+
+    def test_quantity_zero_is_an_empty_holding(self):
+        card, notes = one({"type": "holding.add", "name": "Watch", "asset_type": "stock", "currency": "USD", "quantity": 0})
+        self.assertEqual(notes, [])
+        self.assertNotIn("buy", card["apply"])
+
+    def test_a_dateless_card_is_not_applied_without_its_date(self):
+        card, _ = one({"type": "purchase.add", "holding": "AAPL", "side": "buy", "quantity": 1, "unit_price": 180})
+        out = proposals.preview("purchase.add", card["payload"], state())
+        self.assertEqual((out["ok"], out["reason"]), (False, "Pick the date on the card first."))
+        self.assertTrue(proposals.preview("purchase.add", {**card["payload"], "date": "2025-03-03"}, state())["ok"])
 
 
 if __name__ == "__main__":

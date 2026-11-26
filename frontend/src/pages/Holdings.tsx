@@ -5,6 +5,7 @@ import { Alert } from "../components/Alert";
 import { Card, CardHeader } from "../components/Card";
 import { BlockSkeleton } from "../components/Skeleton";
 import { AddHoldingWizard } from "../components/AddHoldingWizard";
+import { OldHoldings } from "../components/OldHoldings";
 import { Select } from "../components/Select";
 import { DataTable, type Column, type PhoneSortOption } from "../components/DataTable";
 import { useSortFilter } from "../useSortFilter";
@@ -17,8 +18,6 @@ interface FormState {
   instrument_id: string;
   name: string;
   asset_type: string;
-  quantity: string;
-  avg_cost: string;
   currency: string;
   market_symbol: string;
   price_divisor: string;
@@ -29,8 +28,6 @@ const EMPTY: FormState = {
   instrument_id: "",
   name: "",
   asset_type: "stock",
-  quantity: "",
-  avg_cost: "",
   currency: "",
   market_symbol: "",
   price_divisor: "1",
@@ -42,8 +39,6 @@ function toForm(i: Instrument): FormState {
     instrument_id: i.instrument_id,
     name: i.name,
     asset_type: i.asset_type,
-    quantity: String(i.quantity),
-    avg_cost: i.avg_cost === null ? "" : String(i.avg_cost),
     currency: i.currency,
     market_symbol: i.market_symbol ?? "",
     price_divisor: String(i.price_divisor),
@@ -267,6 +262,8 @@ export function HoldingsPage() {
           />
         )}
 
+        {list.data && <OldHoldings items={list.data} onDone={list.reload} />}
+
         <Card as="section" aria-labelledby="hold-h">
           <CardHeader
             id="hold-h"
@@ -375,13 +372,9 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: Hold
     e.preventDefault();
     setError(null);
     const id = form.instrument_id.trim();
-    const q = parseDecimal(form.quantity);
-    const avg = parseDecimal(form.avg_cost);
     const div = parseDecimal(form.price_divisor);
     const currency = form.currency.trim().toUpperCase();
     if (!form.name.trim()) return setError("Enter a name.");
-    if (q === null || q < 0) return setError("Quantity must be a number, zero or more.");
-    if (form.avg_cost.trim() !== "" && (avg === null || avg < 0)) return setError("Average cost must be a number, or leave it empty.");
     if (!/^[A-Z]{3}$/.test(currency)) return setError("Currency is a 3-letter code such as HUF, EUR or USD.");
     if (div === null || div <= 0) return setError("Price divisor must be a number above zero (1 if unsure).");
     setBusy(true);
@@ -390,8 +383,6 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: Hold
         instrument_id: id,
         name: form.name.trim(),
         asset_type: form.asset_type,
-        quantity: q,
-        avg_cost: avg,
         currency,
         market_symbol: form.market_symbol.trim() || null,
         price_divisor: div,
@@ -435,14 +426,6 @@ function HoldingForm({ formRef, form, setForm, onCancel, onSaved, onGone }: Hold
           <div className="field">
             <label htmlFor={fid("ccy")}>Currency</label>
             <input id={fid("ccy")} value={form.currency} onChange={set("currency")} maxLength={3} autoComplete="off" autoCapitalize="characters" spellCheck={false} placeholder="HUF" required />
-          </div>
-          <div className="field">
-            <label htmlFor={fid("qty")}>Quantity</label>
-            <input id={fid("qty")} inputMode="decimal" value={form.quantity} onChange={set("quantity")} autoComplete="off" required />
-          </div>
-          <div className="field">
-            <label htmlFor={fid("avg")}>Average cost per unit, optional</label>
-            <input id={fid("avg")} inputMode="decimal" value={form.avg_cost} onChange={set("avg_cost")} autoComplete="off" />
           </div>
           <div className="field wide">
             <label htmlFor={fid("sym")}>Market symbol, optional</label>

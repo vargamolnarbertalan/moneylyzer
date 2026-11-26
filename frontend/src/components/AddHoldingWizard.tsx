@@ -138,7 +138,7 @@ export function AddHoldingWizard({ existing, onClose, onSaved }: { existing: rea
     try {
       if (!holdingSaved) {
         await endpoints.createInstrument({
-          instrument_id: id, name: d.name.trim(), asset_type: d.type, quantity: 0, avg_cost: null,
+          instrument_id: id, name: d.name.trim(), asset_type: d.type,
           currency: d.currency.trim().toUpperCase(), market_symbol: d.symbol.trim() || null, price_divisor: d.divisor,
           notes: d.notes.trim() || null,
         });

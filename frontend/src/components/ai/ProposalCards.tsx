@@ -6,6 +6,7 @@
 // are never part of "Apply all".
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Sparkles, Trash2 } from "lucide-react";
+import { localISODate } from "../../format";
 import { endpoints, errorMessage, type InstrumentInput, type LotInput, type ProposalApply, type ProposalCard, type ProposalChange } from "../../api";
 
 export type CardStatus = Exclude<ProposalCard["status"], "pending">;
@@ -50,7 +51,12 @@ async function save(card: ProposalCard, payload: ProposalCard["payload"], apply:
 
 type Checked = { done: true } | { changed: ProposalChange[]; summary: string } | { blocked: string } | { confirm: string };
 
-const rowsOf = (rows: ProposalChange[], loose: boolean) => (loose ? rows.filter((r) => !r.derived) : rows);
+/** The rows a re-check compares: never the trade's date row (the user picks it), and in Apply all (`loose`) not the
+ *  rows that follow from other cards of the same holding either. */
+const rowsOf = (rows: ProposalChange[], loose: boolean) => rows.filter((r) => !r.date && !(loose && r.derived));
+
+/** The card's payload as it is checked and applied: with the date the user picked when the card needs one. */
+const payloadOf = (card: ProposalCard, date: string | undefined) => (card.needs_date && date ? { ...card.payload, date } : card.payload);
 
 /** Re-check a card against today's state and apply it, unless its rows changed (the new ones come back), it can't
  *  be applied any more, or it asks first and the user hasn't said yes to it yet (`confirmed`). `loose` (Apply all):
@@ -59,9 +65,10 @@ async function checkAndSave(
   card: ProposalCard,
   shown: ProposalChange[],
   title: string,
-  { confirmed = false, loose = false } = {},
+  { confirmed = false, loose = false, date }: { confirmed?: boolean; loose?: boolean; date?: string } = {},
 ): Promise<Checked> {
-  const now = await endpoints.proposalPreview(card.type, card.payload);
+  if (card.needs_date && !date) return { blocked: "Pick the date first." };
+  const now = await endpoints.proposalPreview(card.type, payloadOf(card, date));
   if (!now.ok) return { blocked: now.reason };
   // the summary names the holding: a different one now (its id reused) is a change even when the rows look alike
   if (now.summary !== title || JSON.stringify(rowsOf(now.changes, loose)) !== JSON.stringify(rowsOf(shown, loose)))
@@ -109,7 +116,22 @@ function Change({ c, applied }: { c: ProposalChange; applied: boolean }) {
 
 const DONE: Record<CardStatus, string> = { applied: "Applied", dismissed: "Dismissed", adjusted: "Adjusted in a later question" };
 
-function Card({ card, onStatus, onAdjust, onBusy, locked }: {
+function DateRow({ card, date, onDate, disabled }: { card: ProposalCard; date: string | undefined; onDate: (v: string) => void; disabled: boolean }) {
+  const id = `prop-date-${card.id}`;
+  return (
+    <li>
+      <label className="prop-label" htmlFor={id}>
+        Date
+      </label>
+      <span className="prop-date">
+        <input id={id} type="date" value={date ?? ""} max={localISODate()} disabled={disabled} onChange={(e) => onDate(e.target.value)} required />
+        {!date && <span className="prop-before">not on the screenshot: pick it</span>}
+      </span>
+    </li>
+  );
+}
+
+function Card({ card, onStatus, onAdjust, onBusy, locked, date, onDate }: {
   card: ProposalCard;
   onStatus: (id: string, s: CardStatus) => void;
   onAdjust: (card: ProposalCard) => void;
@@ -118,6 +140,9 @@ function Card({ card, onStatus, onAdjust, onBusy, locked }: {
   /** "Apply all" or another card's Apply is running: this card's buttons wait (one save at a time, so two saves of
    *  one holding can't overwrite each other). */
   locked: boolean;
+  /** The date picked for a card that needs one (kept by the list, so "Apply all" can use it too). */
+  date: string | undefined;
+  onDate: (id: string, v: string) => void;
 }) {
   const [shown, setShown] = useState(card.changes);
   const [title, setTitle] = useState(card.summary);
@@ -145,7 +170,7 @@ function Card({ card, onStatus, onAdjust, onBusy, locked }: {
     setProblem(null);
     try {
       // "Yes, ..." confirms exactly the rows on screen: if they changed meanwhile, the new ones are shown and asked again
-      const out = await checkAndSave(card, shown, title, { confirmed: confirming !== null });
+      const out = await checkAndSave(card, shown, title, { confirmed: confirming !== null, date });
       if ("blocked" in out) {
         // the button stays: what refuses it now may pass later (another card applied first, the price source back)
         setProblem(out.blocked);
@@ -176,6 +201,7 @@ function Card({ card, onStatus, onAdjust, onBusy, locked }: {
     (changed ? "This changed since the answer. Check the values above, then apply again." : "Suggested by the AI. Check before applying.");
   // once applied, rows that followed from other cards (units held after) may no longer be what happened
   const rows = done ? shown.filter((c) => !c.derived) : shown;
+  const picking = !!card.needs_date && !done; // the date row is a date field until the card is applied
   return (
     <div role="group" className={done ? `prop-card done ${card.status}` : "prop-card"} aria-label={`Suggested change: ${title}`}>
       <div className="prop-head" ref={headRef} tabIndex={-1}>
@@ -184,9 +210,15 @@ function Card({ card, onStatus, onAdjust, onBusy, locked }: {
         {done && <span className="prop-status">{DONE[card.status as CardStatus]}</span>}
       </div>
       <ul className={rows.length >= 3 ? "prop-rows compact" : "prop-rows"}>
-        {rows.map((c, i) => (
-          <Change key={i} c={c} applied={card.status === "applied"} />
-        ))}
+        {rows.map((c, i) =>
+          c.date && picking ? (
+            <DateRow key={i} card={card} date={date} onDate={(v) => onDate(card.id, v)} disabled={wait} />
+          ) : c.date && card.needs_date ? (
+            <Change key={i} c={{ ...c, after: date ?? "picked when applied" }} applied={card.status === "applied"} />
+          ) : (
+            <Change key={i} c={c} applied={card.status === "applied"} />
+          ),
+        )}
       </ul>
       {!done && (
         <>
@@ -195,7 +227,13 @@ function Card({ card, onStatus, onAdjust, onBusy, locked }: {
             {message}
           </p>
           <div className="btn-row">
-            <button type="button" className={confirming && del ? "btn danger small" : "btn small"} onClick={apply} disabled={wait} aria-busy={busy}>
+            <button
+              type="button"
+              className={confirming && del ? "btn danger small" : "btn small"}
+              onClick={apply}
+              disabled={wait || (picking && !date)}
+              aria-busy={busy}
+            >
                 {confirming
                   ? del
                     ? rule
@@ -248,16 +286,21 @@ const ONE_BY_ONE: ProposalCard["type"][] = ["rules.add", "preferences.update"];
 /** Apply the pending cards one after another (never deletes, rules, preferences, nor cards that ask first); stop at
  *  the first that fails, changed, or now asks first. Two cards on one holding go in a row: rows derived from the
  *  earlier one (units held after) are not compared. */
-function ApplyAll({ cards, onStatus, onRunning, waiting }: {
+function ApplyAll({ cards, onStatus, onRunning, waiting, dates }: {
   cards: ProposalCard[];
   onStatus: (id: string, s: CardStatus) => void;
   onRunning: (on: boolean) => void;
   /** A card's own Apply is running: starting now would apply that card a second time. */
   waiting: boolean;
+  /** Dates picked on cards that need one: a card still without its date waits for it. */
+  dates: Readonly<Record<string, string>>;
 }) {
   const [note, setNote] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const todo = cards.filter((c) => c.status === "pending" && !isDelete(c) && !c.confirm && !ONE_BY_ONE.includes(c.type));
+  const todo = cards.filter(
+    (c) => c.status === "pending" && !isDelete(c) && !c.confirm && !ONE_BY_ONE.includes(c.type) && (!c.needs_date || !!dates[c.id]),
+  );
+  const undated = cards.filter((c) => c.status === "pending" && c.needs_date && !dates[c.id]).length;
   if (todo.length < 2 && !note) return null;
 
   const run = async () => {
@@ -270,7 +313,7 @@ function ApplyAll({ cards, onStatus, onRunning, waiting }: {
         setNote(`Applying ${applied + 1} of ${todo.length}…`);
         let out;
         try {
-          out = await checkAndSave(card, card.changes, card.summary, { loose: true });
+          out = await checkAndSave(card, card.changes, card.summary, { loose: true, date: dates[card.id] });
         } catch (err) {
           setNote(`Applied ${applied} of ${todo.length}. Stopped at "${card.summary}": ${errorMessage(err)}`);
           return;
@@ -303,7 +346,9 @@ function ApplyAll({ cards, onStatus, onRunning, waiting }: {
         </button>
       )}
       <span className="prop-all-note" role="status">
-        {note ?? "Applies each card in order, as if you pressed its Apply; deletions, rules, preferences and cards that ask first are left for you."}
+        {note ??
+          "Applies each card in order, as if you pressed its Apply; deletions, rules, preferences and cards that ask first are left for you." +
+            (undated ? ` ${undated === 1 ? "One card waits" : `${undated} cards wait`} for a date.` : "")}
       </span>
     </div>
   );
@@ -317,6 +362,8 @@ export function ProposalCards({ cards, notes, onStatus, onAdjust }: {
 }) {
   const [running, setRunning] = useState(false);
   const [applying, setApplying] = useState<ReadonlySet<string>>(new Set()); // cards whose own Apply is running
+  const [dates, setDates] = useState<Readonly<Record<string, string>>>({}); // picked on cards that need a date
+  const onDate = useCallback((id: string, v: string) => setDates((now) => ({ ...now, [id]: v })), []);
   const onBusy = useCallback((id: string, on: boolean) => {
     setApplying((now) => {
       const next = new Set(now);
@@ -328,7 +375,7 @@ export function ProposalCards({ cards, notes, onStatus, onAdjust }: {
   if (!cards.length && !notes.length) return null;
   return (
     <div className="prop-list">
-      <ApplyAll cards={cards} onStatus={onStatus} onRunning={setRunning} waiting={applying.size > 0} />
+      <ApplyAll cards={cards} onStatus={onStatus} onRunning={setRunning} waiting={applying.size > 0} dates={dates} />
       {cards.map((c) => (
         <Card
           key={c.id}
@@ -337,6 +384,8 @@ export function ProposalCards({ cards, notes, onStatus, onAdjust }: {
           onAdjust={onAdjust}
           onBusy={onBusy}
           locked={running || (applying.size > 0 && !applying.has(c.id))}
+          date={dates[c.id] || undefined}
+          onDate={onDate}
         />
       ))}
       {notes.map((n, i) => (

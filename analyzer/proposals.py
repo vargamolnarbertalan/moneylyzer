@@ -172,10 +172,15 @@ def _base_currency(obj: dict, state: dict) -> dict:
 # ---- holdings and transactions (phase 3). state["holdings"]: {id: {name, type, currency, symbol, quantity, avg_cost,
 # notes, price_divisor, units, lots: [{lot_id, date, side, quantity, unit_price}]}}; state["quote"]: symbol -> quote.
 #
-# A card that loses or overwrites something (a sale, fewer units, a replaced cost, a new name, text the AI reads later)
-# or deletes carries "confirm": the question the browser asks before a second, explicit press, and such a card is
-# never part of Apply all. Rows marked "derived" follow from other cards on the same holding (units held after a
-# transaction): Apply all compares a card without them, so two purchases of one holding can be applied in a row.
+# Units and cost come only from buys and sells (owner decision 2026-11-26): a new holding comes with its first buy, and
+# no card sets units or cost on a holding's record.
+#
+# A card that loses or overwrites something (a sale, a first transaction that replaces an old holding's recorded units
+# or cost, a new name, text the AI reads later, a price far off the market) or deletes carries "confirm": the question
+# the browser asks before a second, explicit press, and such a card is never part of Apply all. Rows marked "derived"
+# follow from other cards on the same holding (units held after a transaction): Apply all compares a card without
+# them, so two purchases of one holding can be applied in a row. A trade without a date carries "needs_date": the
+# card shows a date field (its "date" row) and sends the chosen date with the payload when it is applied.
 TYPE_LABELS = {"stock": "Stock", "etf": "ETF", "mutual_fund": "Mutual fund", "government_bond": "Government bond",
                "commodity": "Commodity"}
 MAX_NAME_CHARS = 80  # a fund's full name fits; a paragraph of instructions doesn't
@@ -292,22 +297,64 @@ def _date(value) -> str:
     return value
 
 
+TRADE_FIELDS = ("quantity", "unit_price", "paid_amount", "paid_currency", "platform", "date")
+
+
+def _trade(obj: dict, currency: str, divisor: float, side: str = "buy") -> dict:
+    """A buy's or sale's fields from a block: {date (None: the user picks it on the card), quantity, price, paid,
+    paid_ccy, platform} and its rows. Paid in the holding's own currency unless the block says otherwise (the app's
+    form would assume the reporting currency, which a broker screenshot rarely is); written out, so the card shows
+    what will be stored."""
+    day = _date(obj["date"]) if obj.get("date") is not None else None
+    quantity = _amount(obj.get("quantity"), "the number of units", positive=True)
+    price = _amount(obj.get("unit_price", 0), "the price per unit")
+    paid = _amount(obj["paid_amount"], "the amount paid", positive=True) if obj.get("paid_amount") is not None else None
+    if not price and paid is None:
+        raise Invalid("it gives neither a price per unit nor the amount paid")
+    paid_ccy = None if paid is None else _currency(
+        obj["paid_currency"] if obj.get("paid_currency") is not None else currency, "the currency paid in")
+    platform = _text(obj["platform"], MAX_PLATFORM_CHARS, "the platform") if obj.get("platform") else None
+    # "date": the row the browser turns into a date field while no date is set; never compared (see ProposalCards)
+    rows = [{"label": "Date", "before": None, "after": day or "pick the date below", "date": True},
+            {"label": "Units", "before": None, "after": _num(quantity)},
+            {"label": "Price per unit", "before": None, "after": f"{_num(price)} {_price_unit(currency, divisor)}"}]
+    if paid is not None:
+        rows.append({"label": "Paid" if side == "buy" else "Received", "before": None, "after": f"{_num(paid)} {paid_ccy}"})
+    if platform:
+        rows.append({"label": "Platform", "before": None, "after": platform})
+    return {"date": day, "quantity": quantity, "price": price, "paid": paid, "paid_ccy": paid_ccy, "platform": platform,
+            "rows": rows}
+
+
+def _lot(trade: dict, side: str) -> dict:
+    return {"side": side, "buy_date": trade["date"], "quantity": trade["quantity"], "unit_price": trade["price"],
+            "paid_amount": trade["paid"], "paid_currency": trade["paid_ccy"], "platform": trade["platform"]}
+
+
+def _trade_payload(trade: dict) -> dict:
+    return {"date": trade["date"], "quantity": trade["quantity"], "unit_price": trade["price"], "paid_amount": trade["paid"],
+            "paid_currency": trade["paid_ccy"], "platform": trade["platform"]}
+
+
 def _holding_add(obj: dict, state: dict) -> dict:
-    _fields(obj, ("name", "asset_type", "reason"), ("symbol", "currency", "quantity", "avg_cost", "id"))
+    """A new holding, with its first buy when the block gives units: units and cost come only from buys and sells
+    (owner decision 2026-11-26), so a holding is never created with units of its own."""
+    _fields(obj, ("name", "asset_type", "reason"), ("symbol", "currency", "id", *TRADE_FIELDS))
     name = _text(obj["name"], MAX_NAME_CHARS, "the name")
     kind = obj["asset_type"]
     if kind not in TYPE_LABELS:
         raise Invalid("it gives the holding a type Moneylyzer doesn't have")
     symbol = clean_symbol(obj["symbol"]) if obj.get("symbol") else ""
-    quantity = _amount(obj.get("quantity", 0), "the number of units")
-    avg_cost = _amount(obj["avg_cost"], "the average cost") if obj.get("avg_cost") is not None else None
+    buying = obj.get("quantity") not in (None, 0)  # 0: an empty holding, as a model may write it
+    if not buying and any(obj.get(k) is not None for k in TRADE_FIELDS if k != "quantity"):
+        raise Invalid("it gives a price, payment or date without the number of units bought")
     divisor, price = 1.0, None
     # the same screenshot imported twice, or a fund without a ticker: never a second holding by the same name or symbol
     # ("proposed": added by an earlier card of this answer, see _simulate)
     same = next((h for h in state["holdings"].values() if h["name"].casefold() == name.casefold()), None)
     if same:
         raise Invalid("another suggestion in this answer adds a holding with that name" if same.get("proposed")
-                      else "you already have a holding with that name; it can be updated instead")
+                      else "you already have a holding with that name; propose a buy of it instead")
     if obj.get("id") is not None:  # a stored card's: the id it showed (another card may have taken it since)
         if not isinstance(obj["id"], str) or not re.fullmatch(r"[A-Z0-9_-]{1,64}", obj["id"]):
             raise Invalid("its id is not one Moneylyzer makes")
@@ -317,7 +364,7 @@ def _holding_add(obj: dict, state: dict) -> dict:
         same = next((h for h in state["holdings"].values() if h["symbol"] and h["symbol"].upper() == symbol.upper()), None)
         if same:
             raise Invalid("another suggestion in this answer adds a holding with that symbol" if same.get("proposed")
-                          else "you already have a holding with that symbol; it can be updated instead")
+                          else "you already have a holding with that symbol; propose a buy of it instead")
         try:
             quote = state["quote"](symbol)
         except ValueError as exc:  # symbols.SymbolError
@@ -329,6 +376,7 @@ def _holding_add(obj: dict, state: dict) -> dict:
         if not obj.get("currency"):
             raise Invalid("a holding without a symbol needs its currency")
         currency = _currency(obj["currency"], "the currency")
+    trade = _trade(obj, currency, divisor) if buying else None
     base = re.sub(r"[^A-Za-z0-9_-]", "", (symbol or name).split(".")[0].replace(" ", "-")).upper()[:24] or "HOLDING"
     if obj.get("id") is not None:
         hid = obj["id"]  # checked above, before the quote
@@ -340,22 +388,26 @@ def _holding_add(obj: dict, state: dict) -> dict:
     rows = [{"label": "Name", "before": None, "after": name},
             {"label": "Symbol", "before": None, "after": symbol or "none (prices added by hand)"},
             {"label": "Type", "before": None, "after": TYPE_LABELS[kind]},
-            {"label": "Currency", "before": None, "after": currency + (f", prices in {unit}" if divisor != 1 else "")},
-            {"label": "Units", "before": None, "after": _num(quantity)}]
+            {"label": "Currency", "before": None, "after": currency + (f", prices in {unit}" if divisor != 1 else "")}]
     careful = []
-    if avg_cost is not None:
-        rows.append({"label": "Average cost per unit", "before": None, "after": f"{_num(avg_cost)} {unit}"})
-        if avg_cost and price and not 1 / FAR <= avg_cost / float(price) <= FAR:
-            # no price in the text: the row must read the same when the card is re-checked later
-            rows.append({"label": "Check", "before": None,
-                         "after": f"The average cost is over {FAR:g} times off the symbol's price today; is it per unit, in {unit}?"})
-            careful.append(f"gives an average cost over {FAR:g} times off the price today")
+    if trade:
+        rows += trade["rows"]
+        careful += _far(trade["price"], price, unit, "price per unit", rows)
+    else:
+        rows.append({"label": "Units", "before": None, "after": "none yet (add its buys)"})
     payload = {"id": hid, "name": name, "asset_type": kind, "symbol": symbol, "currency": None if symbol else currency,
-               "quantity": quantity, "avg_cost": avg_cost}
-    apply = {"instrument_id": hid, "name": name, "asset_type": kind, "quantity": quantity, "avg_cost": avg_cost,
-             "currency": currency, "market_symbol": symbol or None, "price_divisor": divisor}
-    return {"type": "holding.add", "payload": payload, "apply": apply, "summary": f"Add the holding {name}", "changes": rows,
-            **_confirm(careful)}
+               **(_trade_payload(trade) if trade else {})}
+    apply = {"instrument_id": hid, "name": name, "asset_type": kind, "currency": currency, "market_symbol": symbol or None,
+             "price_divisor": divisor, "notes": None}
+    if trade:
+        lot = _lot(trade, "buy")
+        del lot["side"]
+        apply["buy"] = lot
+    card = {"type": "holding.add", "payload": payload, "apply": apply, "changes": rows, **_confirm(careful),
+            "summary": f"Add the holding {name}" + (f" with a buy of {_num(trade['quantity'])}" if trade else "")}
+    if trade and not trade["date"]:
+        card["needs_date"] = True
+    return card
 
 
 def _holding_update(obj: dict, state: dict) -> dict:
@@ -364,11 +416,9 @@ def _holding_update(obj: dict, state: dict) -> dict:
     asked = obj["changes"]
     if not isinstance(asked, dict) or not asked:
         raise Invalid("it names nothing to change")
-    apply = {"instrument_id": hid, "name": h["name"], "asset_type": h["type"], "quantity": h["quantity"],
-             "avg_cost": h["avg_cost"], "currency": h["currency"], "market_symbol": h["symbol"] or None,
-             "price_divisor": h["price_divisor"], "notes": h["notes"] or None}
+    apply = {"instrument_id": hid, "name": h["name"], "asset_type": h["type"], "currency": h["currency"],
+             "market_symbol": h["symbol"] or None, "price_divisor": h["price_divisor"], "notes": h["notes"] or None}
     rows, changes, careful = [], {}, []
-    unit = _price_unit(h["currency"], h["price_divisor"])
     # notes_was: the notes this card was made against (stored by the card, never needed from the model). Today's
     # notes must still be exactly those: a second Apply (another tab) adds nothing, and a card made before the user
     # cut or cleared them can't bring the old text back.
@@ -403,23 +453,7 @@ def _holding_update(obj: dict, state: dict) -> dict:
             changes["notes_add"], changes["notes_was"] = added, now
             careful.append("adds text to the holding's notes, which the AI analyst reads with your later questions")
         elif key in ("quantity", "avg_cost"):
-            if h["lots"]:
-                raise Invalid("this holding's units and cost come from its transactions; add a transaction instead")
-            value = _amount(value, "the number of units" if key == "quantity" else "the average cost")
-            if value != h[key]:
-                if key == "quantity":
-                    rows.append({"label": "Units", "before": _num(h[key]), "after": _num(value)})
-                else:  # with its unit: a cost in pounds for a holding priced in pence is plain to see
-                    rows.append({"label": "Average cost per unit",
-                                 "before": f"{_num(h[key])} {unit}" if h[key] is not None else "none",
-                                 "after": f"{_num(value)} {unit}"})
-                apply[key] = changes[key] = value
-                if key == "quantity" and value < h[key]:
-                    careful.append("lowers the units")
-                elif key == "avg_cost":
-                    if h[key] is not None:
-                        careful.append("replaces the average cost")
-                    careful += _far(value, _last_price(h, state), unit, "average cost", rows)
+            raise Invalid("units and cost come only from buys and sells; it can be proposed as a buy or a sale")
         else:
             raise Invalid("it tries to change something about the holding that can't be suggested")
     if not rows:
@@ -429,22 +463,13 @@ def _holding_update(obj: dict, state: dict) -> dict:
 
 
 def _purchase_add(obj: dict, state: dict) -> dict:
-    _fields(obj, ("holding", "side", "date", "quantity", "unit_price", "reason"), ("paid_amount", "paid_currency", "platform"))
+    _fields(obj, ("holding", "side", "quantity", "reason"), ("unit_price", "paid_amount", "paid_currency", "platform", "date"))
     hid, h = _holding(obj, state)
     side = obj["side"]
     if side not in ("buy", "sell"):
         raise Invalid("a transaction is a buy or a sell")
-    day = _date(obj["date"])
-    quantity = _amount(obj["quantity"], "the number of units", positive=True)
-    price = _amount(obj["unit_price"], "the price per unit")
-    paid = _amount(obj["paid_amount"], "the amount paid", positive=True) if obj.get("paid_amount") is not None else None
-    if not price and paid is None:
-        raise Invalid("it gives neither a price per unit nor the amount paid")
-    # Paid in the holding's own currency unless the block says otherwise (the app's form would assume the reporting
-    # currency, which a broker screenshot rarely is); written out, so the card shows what will be stored.
-    paid_ccy = None if paid is None else _currency(
-        obj["paid_currency"] if obj.get("paid_currency") is not None else h["currency"], "the currency paid in")
-    platform = _text(obj["platform"], MAX_PLATFORM_CHARS, "the platform") if obj.get("platform") else None
+    trade = _trade(obj, h["currency"], h["price_divisor"], side)
+    quantity = trade["quantity"]
     if side == "sell" and not h["lots"]:
         raise Invalid("a holding without recorded purchases can't be sold from; add its purchases first")
     if side == "sell" and quantity > h["units"] + 1e-9:
@@ -453,18 +478,13 @@ def _purchase_add(obj: dict, state: dict) -> dict:
     held = h["units"] if h["lots"] else 0.0
     after = held + (quantity if side == "buy" else -quantity)
     # "derived": follows from the other cards of the same holding (see the section comment)
-    rows = [{"label": "Transaction", "before": None, "after": f"{'Buy' if side == 'buy' else 'Sell'} on {day}"},
-            {"label": "Units", "before": None, "after": _num(quantity)},
-            {"label": "Price per unit", "before": None, "after": f"{_num(price)} {_price_unit(h['currency'], h['price_divisor'])}"},
+    rows = [{"label": "Transaction", "before": None, "after": "Buy" if side == "buy" else "Sell"}, *trade["rows"],
             {"label": "Units held", "before": _num(h["units"]), "after": _num(after), "derived": True}]
-    if paid is not None:
-        rows.insert(3, {"label": "Paid" if side == "buy" else "Received", "before": None, "after": f"{_num(paid)} {paid_ccy}"})
-    if platform:
-        rows.append({"label": "Platform", "before": None, "after": platform})
     careful = ["records a sale"] if side == "sell" else []
-    careful += _far(price, _last_price(h, state), _price_unit(h["currency"], h["price_divisor"]), "price per unit", rows)
+    careful += _far(trade["price"], _last_price(h, state), _price_unit(h["currency"], h["price_divisor"]), "price per unit", rows)
     if not h["lots"] and h["quantity"]:
-        # from now on the transactions give the units and the average cost (engine.analyze), not the holding's record
+        # an old holding with units on its record only (see db.record_to_buy): from now on the transactions give the
+        # units and the average cost (engine.analyze), not the record
         cost = h["avg_cost"] is not None
         rows.append({"label": "Note", "before": None, "derived": True,
                      "after": f"Its first transaction: from now on its units{' and average cost' if cost else ''} come "
@@ -474,12 +494,13 @@ def _purchase_add(obj: dict, state: dict) -> dict:
             careful.append(f"replaces the {_num(h['quantity'])} units on the holding with {_num(after)}")
         if cost:
             careful.append("replaces the average cost on the holding with its transactions' cost")
-    payload = {"holding": hid, "side": side, "date": day, "quantity": quantity, "unit_price": price, "paid_amount": paid,
-               "paid_currency": paid_ccy if paid is not None else None, "platform": platform}
-    apply = {"instrument_id": hid, "side": side, "buy_date": day, "quantity": quantity, "unit_price": price,
-             "paid_amount": paid, "paid_currency": payload["paid_currency"], "platform": platform}
-    return {"type": "purchase.add", "payload": payload, "apply": apply,
-            "summary": f"Add a {'purchase' if side == 'buy' else 'sale'} of {h['name']}", "changes": rows, **_confirm(careful)}
+    payload = {"holding": hid, "side": side, **_trade_payload(trade)}
+    apply = {"instrument_id": hid, **_lot(trade, side)}
+    card = {"type": "purchase.add", "payload": payload, "apply": apply, "changes": rows, **_confirm(careful),
+            "summary": f"Add a {'purchase' if side == 'buy' else 'sale'} of {h['name']}"}
+    if not trade["date"]:
+        card["needs_date"] = True
+    return card
 
 
 def _holding_delete(obj: dict, state: dict) -> dict:
@@ -539,15 +560,16 @@ def _simulate(state: dict, card: dict) -> None:
     may build on it."""
     a, holdings = card.get("apply") or {}, state["holdings"]
     if card["type"] == "holding.add":
+        buy = a.get("buy")
+        lots = [{"lot_id": None, "date": buy["buy_date"], "side": "buy", "quantity": buy["quantity"],
+                 "unit_price": buy["unit_price"]}] if buy else []
         holdings[a["instrument_id"]] = {
             "name": a["name"], "type": a["asset_type"], "currency": a["currency"], "symbol": a["market_symbol"] or "",
-            "quantity": a["quantity"], "avg_cost": a["avg_cost"], "notes": "", "price_divisor": a["price_divisor"],
-            "units": a["quantity"], "lots": [], "proposed": True}
+            "quantity": 0.0, "avg_cost": None, "notes": "", "price_divisor": a["price_divisor"],
+            "units": buy["quantity"] if buy else 0.0, "lots": lots, "proposed": True}
     elif card["type"] == "holding.update":
         h = holdings[a["instrument_id"]]
-        holdings[a["instrument_id"]] = {**h, "name": a["name"], "type": a["asset_type"], "quantity": a["quantity"],
-                                        "avg_cost": a["avg_cost"], "notes": a.get("notes") or "",
-                                        "units": h["units"] if h["lots"] else a["quantity"]}
+        holdings[a["instrument_id"]] = {**h, "name": a["name"], "type": a["asset_type"], "notes": a.get("notes") or ""}
     elif card["type"] == "rules.add":
         state["rules"] = [*state["rules"], card["payload"]["rule"]]
     elif card["type"] == "preferences.update":
@@ -605,7 +627,9 @@ def _run(bodies: list[str], state: dict) -> tuple[list[dict], list[str]]:
             problems.append("it could not be read")
             continue
         key = json.dumps([card["type"], card["payload"]], sort_keys=True)
-        if key in seen:  # the same change twice is one card
+        # the same change twice is one card; but two trades without a date look alike until the user dates them
+        undated = card["type"] == "purchase.add" and card["payload"].get("date") is None
+        if key in seen and not undated:
             if card["type"] == "purchase.add":  # but two identical trades on one day do happen: say one was left out
                 problems.append("it repeated another transaction exactly (Moneylyzer keeps one of two identical "
                                 "transactions)")
@@ -660,6 +684,8 @@ def preview(kind: str, payload: dict, state: dict) -> dict:
         return {"ok": False, "reason": f"This can't be applied now: {exc}."}
     except Exception:
         return {"ok": False, "reason": "This suggestion is not readable any more."}
+    if card.get("needs_date"):  # the browser sends the picked date; without one there is nothing to store yet
+        return {"ok": False, "reason": "Pick the date on the card first."}
     # `apply`: the body for the app's own endpoint, built here from today's state (holdings and transactions)
     # `confirm`: the question to ask before a second press (today's: a card can turn careful since its answer)
     return {"ok": True, "summary": card["summary"], "changes": card["changes"], "payload": card["payload"],

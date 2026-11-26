@@ -8,7 +8,9 @@ import asyncio
 import io
 import json
 import logging
+import math
 import os
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -28,7 +30,7 @@ from analyzer.portfolio import RateBook, intraday_value_history, value_history
 from analyzer.risk import risk_report
 from analyzer.market import COMMON_CURRENCIES, CURRENCY_RE, download_intraday, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
-from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
+from analyzer.validation import ASSET_TYPE_CODES, HOLDINGS_HEADER, LOTS_HEADER, validate_holdings, validate_lots
 from server import __version__, auth, claude_login
 from server.live import LIVE_CHOICES, clean, hub
 
@@ -408,21 +410,36 @@ def prefs_patch(changes: dict = Body(...), user: str = Depends(auth.require_user
 
 
 # ---------------------------------------------------------------- instruments
+class FirstBuy(BaseModel):
+    """A new holding's first buy, stored with it in one step (?create=1 only)."""
+    buy_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    quantity: float = Field(gt=0)
+    unit_price: float = Field(default=0, ge=0)
+    paid_amount: float | None = Field(default=None, ge=0)
+    paid_currency: str | None = Field(default=None, pattern=r"^[A-Za-z]{3}$")
+    notes: str | None = Field(default=None, max_length=500)
+    platform: str | None = Field(default=None, max_length=60)
+
+
 class InstrumentBody(BaseModel):
+    """A holding's description. No units or cost: those come only from its buys and sells (owner decision
+    2026-11-26); a client that still sends quantity or avg_cost has them ignored."""
     instrument_id: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=200)
     asset_type: str
-    quantity: float = Field(ge=0)
-    avg_cost: float | None = Field(default=None, ge=0)
     currency: str = Field(min_length=3, max_length=3)
     market_symbol: str | None = Field(default=None, max_length=64)
     price_divisor: float = Field(default=1.0, gt=0)
     notes: str | None = Field(default=None, max_length=1000)
+    buy: FirstBuy | None = None
 
 
 @app.get("/api/instruments")
 def instruments(user: str = Depends(auth.require_user)):
-    return jsonable(db.get_instruments().to_dict("records"))
+    """Every holding; `record_only`: its units are on its record without transactions (an old holding, to be
+    turned into a buy with POST /api/instruments/{id}/record-to-buy)."""
+    old = db.record_only_ids()
+    return jsonable([{**r, "record_only": r["instrument_id"] in old} for r in db.get_instruments().to_dict("records")])
 
 
 @app.post("/api/instruments")
@@ -433,7 +450,9 @@ async def instrument_save(body: InstrumentBody, create: bool = False, update: bo
     not silently re-created from a stale form."""
     if body.asset_type not in ASSET_TYPE_CODES:
         raise HTTPException(400, f"asset_type must be one of {', '.join(ASSET_TYPE_CODES)}")
-    row = body.model_dump()
+    if body.buy is not None and not create:
+        raise HTTPException(400, "A first buy can only come with a new holding (?create=1); add transactions otherwise.")
+    row = body.model_dump(exclude={"buy"})
     row["currency"] = row["currency"].strip().upper()
     existing = db.get_instruments()
     match = existing[existing["instrument_id"] == row["instrument_id"].strip()]
@@ -447,12 +466,53 @@ async def instrument_save(body: InstrumentBody, create: bool = False, update: bo
         # silently reinterpret every purchase.
         if old["currency"] != row["currency"] or float(old["price_divisor"]) != float(row["price_divisor"]):
             raise HTTPException(409, "This holding has transactions: its currency and price divisor cannot change.")
-    db.upsert_instrument(row)
+    if body.buy is not None:
+        lot = body.buy.model_dump()
+        frame = pd.DataFrame([{**lot, "instrument_id": row["instrument_id"].strip(), "side": "buy",
+                               "paid_amount": "" if lot["paid_amount"] is None else str(lot["paid_amount"]),
+                               "paid_currency": lot["paid_currency"] or "", "quantity": str(lot["quantity"]),
+                               "unit_price": str(lot["unit_price"])}])
+        try:
+            (checked,) = validate_lots(frame, {row["instrument_id"].strip()}, db.base_currency())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc).removeprefix("CSV line 2: ")) from None
+        try:
+            db.create_instrument_with_buy(row, checked)
+        except sqlite3.IntegrityError:  # created meanwhile (another tab)
+            raise HTTPException(409, f"A holding with the ID {row['instrument_id'].strip()} already exists. Choose another ID.") from None
+    else:
+        db.save_instrument(row)
     await hub.recompute()
     raw_old = None if match.empty else match.iloc[0]["market_symbol"]
     old_symbol = None if match.empty else ("" if pd.isna(raw_old) else str(raw_old).strip())  # a stored NULL reads as NaN
     if old_symbol != str(row.get("market_symbol") or "").strip():  # new, or another symbol: not a notes edit
         hub.request_refresh(row["instrument_id"].strip())  # its quote and daily history now, not an interval later
+    return {"ok": True}
+
+
+class RecordToBuyBody(BaseModel):
+    buy_date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    unit_price: float | None = Field(default=None, gt=0)
+    platform: str | None = Field(default=None, max_length=60)
+
+
+@app.post("/api/instruments/{instrument_id}/record-to-buy")
+async def instrument_record_to_buy(instrument_id: str, body: RecordToBuyBody, user: str = Depends(auth.require_user)):
+    """Turn an old holding's recorded units into one buy on the date the owner picks (a one-time step: from then on
+    its units and cost come from transactions only)."""
+    try:
+        day = pd.Timestamp(body.buy_date)
+    except ValueError:
+        raise HTTPException(400, "The date is not a real date.") from None
+    if day > pd.Timestamp.today().normalize() or day.year < 1900:
+        raise HTTPException(400, "The date must be a past date.")
+    if body.unit_price is not None and not math.isfinite(body.unit_price):  # as POST /api/lots refuses it
+        raise HTTPException(400, "The price per unit must be a finite number.")
+    try:
+        db.record_to_buy(instrument_id, body.buy_date, body.unit_price, (body.platform or "").strip() or None)
+    except db.NothingToConvert as exc:
+        raise HTTPException(409, str(exc)) from None
+    await hub.recompute()
     return {"ok": True}
 
 
@@ -611,7 +671,16 @@ async def import_holdings(file: UploadFile = File(...), user: str = Depends(auth
         rows = validate_holdings(frame)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
-    count = db.upsert_instruments(rows)
+    # like the edit form: a holding with transactions keeps its currency and price divisor (they say how every
+    # stored transaction is read)
+    stored = {r["instrument_id"]: r for r in db.get_instruments().to_dict("records")}
+    for line, row in enumerate(rows, start=2):
+        old = stored.get(row["instrument_id"])
+        if old and db.count_lots(row["instrument_id"]) and (
+                old["currency"] != row["currency"] or float(old["price_divisor"]) != float(row["price_divisor"])):
+            raise HTTPException(400, f"CSV line {line}: {row['instrument_id']} has transactions: its currency and price "
+                                     "divisor cannot change.")
+    count = db.save_instruments(rows)  # never units or cost: those come from the transactions file
     await hub.refresh()
     return {"imported": count}
 
@@ -656,7 +725,7 @@ async def import_prices(file: UploadFile = File(...), user: str = Depends(auth.r
 
 
 TEMPLATES = {
-    "holdings": "instrument_id,name,asset_type,quantity,avg_cost,currency,market_symbol,price_divisor,notes\n",
+    "holdings": HOLDINGS_HEADER + "\n",
     "lots": LOTS_HEADER + "\n",
     "prices": "instrument_id,date,close,currency\n",
 }

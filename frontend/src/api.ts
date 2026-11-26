@@ -163,18 +163,21 @@ export interface Instrument {
   price_divisor: number;
   notes: Nullable<string>;
   updated_at?: Nullable<string>;
+  /** Units on its record without transactions (an old holding): turned into a buy once, with endpoints.recordToBuy. */
+  record_only?: boolean;
 }
 
+/** A holding's description. No units or cost: those come only from its buys and sells (owner decision 2026-11-26). */
 export interface InstrumentInput {
   instrument_id: string;
   name: string;
   asset_type: string;
-  quantity: number;
-  avg_cost: Nullable<number>;
   currency: string;
   market_symbol: Nullable<string>;
   price_divisor: number;
   notes: Nullable<string>;
+  /** Create only: the holding's first buy, stored with it in one step (both or neither). */
+  buy?: Omit<LotInput, "instrument_id" | "side" | "notes"> & { notes?: Nullable<string> };
 }
 
 export interface Metrics {
@@ -449,6 +452,8 @@ export interface ProposalCard {
   /** The question to ask before a second press: a delete, or a change that loses or overwrites something. Such a
    *  card is never part of "Apply all"; the preview says whether it (still) asks. */
   confirm?: string;
+  /** A buy or sale whose date wasn't given: the card shows a date field and sends the date with its payload. */
+  needs_date?: boolean;
   status: "pending" | "applied" | "dismissed" | "adjusted";
 }
 
@@ -459,6 +464,8 @@ export interface ProposalChange {
   after: Nullable<string>;
   /** Follows from other cards on the same holding (units held after a transaction): "Apply all" doesn't compare it. */
   derived?: boolean;
+  /** The trade's date: a date field on a card that needs one; never compared (it is what the user picks). */
+  date?: boolean;
 }
 
 /** The body for the app's own endpoint, built by the server from today's state (holdings and transactions). */
@@ -669,6 +676,9 @@ export const endpoints = {
     api.get<IntradayChart>(`/api/instruments/${encodeURIComponent(id)}/chart?range=${encodeURIComponent(range)}&interval=${encodeURIComponent(interval)}`),
 
   addLot: (body: LotInput) => api.post<{ ok: boolean }>("/api/lots", body),
+  /** An old holding's recorded units become one buy on `buy_date` (at its average cost, or `unit_price`). */
+  recordToBuy: (id: string, body: { buy_date: string; unit_price: Nullable<number>; platform: Nullable<string> }) =>
+    api.post<{ ok: boolean }>(`/api/instruments/${encodeURIComponent(id)}/record-to-buy`, body),
   platforms: () => api.get<string[]>("/api/platforms"),
   lookup: (q: string) => api.get<LookupResult[]>(`/api/lookup?q=${encodeURIComponent(q)}`),
   quote: (symbol: string) => api.get<QuotePreview>(`/api/quote?symbol=${encodeURIComponent(symbol)}`),

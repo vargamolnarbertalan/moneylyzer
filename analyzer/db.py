@@ -266,6 +266,93 @@ def upsert_instruments(rows: Iterable[dict]) -> int:
     return count
 
 
+_SAVE_INSTRUMENT = """
+    INSERT INTO instruments (instrument_id, name, asset_type, quantity, avg_cost, currency, market_symbol, price_divisor,
+                             notes, updated_at)
+    VALUES (?, ?, ?, 0, NULL, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(instrument_id) DO UPDATE SET
+        name=excluded.name, asset_type=excluded.asset_type, currency=excluded.currency,
+        market_symbol=excluded.market_symbol, price_divisor=excluded.price_divisor, notes=excluded.notes,
+        updated_at=CURRENT_TIMESTAMP
+"""
+
+
+def _instrument_values(row: dict) -> tuple:
+    return (
+        str(row["instrument_id"]).strip(),
+        str(row["name"]).strip(),
+        str(row["asset_type"]).strip(),
+        str(row.get("currency", "EUR") or "EUR").strip().upper(),
+        None if pd.isna(row.get("market_symbol")) or row.get("market_symbol") in (None, "") else str(row["market_symbol"]).strip(),
+        float(row.get("price_divisor", 1) or 1),
+        None if pd.isna(row.get("notes")) else str(row.get("notes", "")),
+    )
+
+
+def save_instrument(row: dict) -> None:
+    """Add or update a holding's description. Units and average cost come only from its buys and sells (owner
+    decision 2026-11-26): a new holding starts with none on its record, and an update leaves the record as it is
+    (an old holding's units, until record_to_buy turns them into a buy)."""
+    with connect() as conn:
+        conn.execute(_SAVE_INSTRUMENT, _instrument_values(row))
+
+
+def save_instruments(rows: Iterable[dict]) -> int:
+    count = 0
+    with connect() as conn:
+        for row in rows:
+            conn.execute(_SAVE_INSTRUMENT, _instrument_values(row))
+            count += 1
+    return count
+
+
+def create_instrument_with_buy(row: dict, lot: dict) -> None:
+    """A new holding and its first buy, together or not at all (the AI's "add a holding" card). An existing id
+    raises sqlite3.IntegrityError: this never updates a holding."""
+    with connect() as conn:
+        conn.execute(_SAVE_INSTRUMENT.split("ON CONFLICT")[0], _instrument_values(row))
+        conn.execute("INSERT INTO lots(instrument_id, buy_date, quantity, unit_price, paid_amount, paid_currency, notes, "
+                     "platform, side) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", _lot_values({**lot, "side": "buy"}))
+
+
+class NothingToConvert(ValueError):
+    pass
+
+
+def record_to_buy(instrument_id: str, buy_date: str, unit_price: float | None, platform: str | None) -> None:
+    """Turn the units on an old holding's record into one buy on `buy_date` (at its average cost, or `unit_price`)
+    and clear the record, in one transaction. Only for a holding with units on its record and no transactions."""
+    with connect() as conn:
+        row = conn.execute("SELECT quantity, avg_cost FROM instruments WHERE instrument_id = ?", (instrument_id,)).fetchone()
+        if row is None:
+            raise NothingToConvert("This holding no longer exists.")
+        if conn.execute("SELECT 1 FROM lots WHERE instrument_id = ? LIMIT 1", (instrument_id,)).fetchone():
+            raise NothingToConvert("This holding already has transactions: its units come from them.")
+        quantity = float(row["quantity"] or 0)
+        recorded = row["avg_cost"] if row["avg_cost"] is not None and float(row["avg_cost"]) > 0 else None
+        if recorded is not None and unit_price is not None:
+            raise NothingToConvert("This holding has an average cost on its record: the buy uses it.")
+        price = recorded if recorded is not None else unit_price
+        if quantity <= 0:
+            raise NothingToConvert("This holding has no units on its record to turn into a buy.")
+        if price is None or float(price) <= 0:
+            raise NothingToConvert("Enter the price per unit: this holding has no average cost on its record.")
+        lot = {"instrument_id": instrument_id, "buy_date": buy_date, "quantity": quantity, "unit_price": float(price),
+               "platform": platform, "side": "buy"}
+        conn.execute("INSERT INTO lots(instrument_id, buy_date, quantity, unit_price, paid_amount, paid_currency, notes, "
+                     "platform, side) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", _lot_values(lot))
+        conn.execute("UPDATE instruments SET quantity = 0, avg_cost = NULL, updated_at = CURRENT_TIMESTAMP "
+                     "WHERE instrument_id = ?", (instrument_id,))
+
+
+def record_only_ids() -> set[str]:
+    """Holdings whose units are on their record only (no transactions): the ones record_to_buy is for."""
+    with connect() as conn:
+        rows = conn.execute("SELECT instrument_id FROM instruments i WHERE quantity > 0 AND NOT EXISTS "
+                            "(SELECT 1 FROM lots l WHERE l.instrument_id = i.instrument_id)").fetchall()
+    return {r["instrument_id"] for r in rows}
+
+
 def get_instruments() -> pd.DataFrame:
     with connect() as conn:
         return pd.read_sql_query(
@@ -401,7 +488,7 @@ class SaleTooLarge(ValueError):
 
 
 class NoPurchases(SaleTooLarge):
-    """A sale on a holding that has no stored purchase: its units come from the holding record."""
+    """A sale on a holding that has no stored buy (none at all, or an old holding's units still on its record)."""
 
 
 class LotInUse(ValueError):
@@ -491,6 +578,9 @@ def add_lots(lots: list[dict]) -> tuple[int, int]:
     with connect() as conn:
         new_ids: dict[int, int] = {}      # lot_id of each inserted row -> its index in `lots`
         first_sale: dict[str, int] = {}   # instrument_id -> index of its first inserted sale
+        # holdings without a transaction yet: their first one replaces the units on the record, for good (below)
+        firsts = {v[0] for _, v in prepared
+                  if not conn.execute("SELECT 1 FROM lots WHERE instrument_id = ? LIMIT 1", (v[0],)).fetchone()}
         for index, values in prepared:
             duplicate = conn.execute(
                 "SELECT 1 FROM lots WHERE instrument_id=? AND buy_date=? AND quantity=? AND unit_price=? "
@@ -514,9 +604,12 @@ def add_lots(lots: list[dict]) -> tuple[int, int]:
             stored = [dict(r) for r in conn.execute("SELECT lot_id, buy_date, side, quantity FROM lots WHERE instrument_id = ?",
                                                     (instrument_id,)).fetchall()]
             if not any(r["side"] == "buy" for r in stored):
-                # a holding whose units come from its holding record: there is nothing to sell from yet
-                raise NoPurchases("This holding's units come from its holding record. "
-                                  "Record its purchases first, then the sale.", index)
+                # nothing to sell from yet: units come only from buys (an old holding's record: record-to-buy first)
+                held = conn.execute("SELECT quantity FROM instruments WHERE instrument_id = ?", (instrument_id,)).fetchone()
+                old = held is not None and (held["quantity"] or 0) > 0
+                raise NoPurchases("This holding's units are on its record without a buy: turn them into a buy on the "
+                                  "Holdings page first, then the sale." if old
+                                  else "This holding has no buys yet: record a buy first, then the sale.", index)
             problem = fifo_shortfall(stored)
             if problem is None:
                 continue
@@ -528,6 +621,12 @@ def add_lots(lots: list[dict]) -> tuple[int, int]:
                 index = new_ids[max(causes, key=lambda r: (r["buy_date"], r["lot_id"]))["lot_id"]]
             raise SaleTooLarge(f"That would leave your sale on {problem['date']} larger than the "
                                f"{units_text(problem['held'])} you would hold then.", index)
+        # An old holding's first transaction replaces the units and cost on its record (the engine reads the
+        # transactions from now on): clear them in the same step, so deleting that transaction later can't bring the
+        # old units back (owner decision 2026-11-26: units and cost come only from buys and sells).
+        for instrument_id in firsts & {v[0] for i, v in prepared if i in new_ids.values()}:
+            conn.execute("UPDATE instruments SET quantity = 0, avg_cost = NULL, updated_at = CURRENT_TIMESTAMP "
+                         "WHERE instrument_id = ? AND (quantity != 0 OR avg_cost IS NOT NULL)", (instrument_id,))
     return added, skipped
 
 
