@@ -1,4 +1,5 @@
 """API tests: real FastAPI app, temporary database, no network (market sources faked)."""
+import base64
 import io
 import tempfile
 import unittest
@@ -121,6 +122,40 @@ class ApiTests(unittest.TestCase):
         missing = "/api/advisor/conversations/conv-cards-1/proposals/0123456789ab"
         self.assertEqual(self.client.post(missing, headers=H, json={"status": "dismissed"}).status_code, 404)
         self.assertEqual(self.client.post(url, headers=H, json={"status": "dismissed"}).status_code, 409)  # applied stays applied
+
+    def test_an_import_with_a_file_may_propose_up_to_25_cards(self):
+        self.setup_account()
+        nl = chr(10)
+        blocks = [nl.join(["```moneylyzer-proposal",
+                           json.dumps({"type": "holding.add", "name": f"Fund {i}", "asset_type": "mutual_fund", "currency": "HUF",
+                                       "quantity": i + 1, "avg_cost": 1000, "reason": "From your screenshot."}), "```"])
+                  for i in range(7)]
+        result = {"text": "Seven positions." + nl + nl + nl.join(blocks), "model": "m", "sources": []}
+        note = base64.b64encode(b"Fund 0 1 unit").decode()
+        with mock.patch("analyzer.advisor.complete", return_value=result):
+            plain = self.client.post("/api/advisor/ask", headers=H, json={"question": "Import?"}).json()
+            files = self.client.post("/api/advisor/ask", headers=H, json={"question": "Import this.",
+                                     "attachments": [{"name": "positions.txt", "data": note}]}).json()
+        self.assertEqual(len(plain["proposals"]), 5)
+        self.assertEqual(len(files["proposals"]), 7)
+        card = files["proposals"][0]
+        prev = self.client.post("/api/advisor/proposals/preview", headers=H, json={"type": card["type"], "payload": card["payload"]}).json()
+        self.assertEqual(prev["apply"]["instrument_id"], "FUND-0")
+        self.assertEqual(self.client.post("/api/instruments?create=1", headers=H, json=prev["apply"]).status_code, 200)
+        again = self.client.post("/api/advisor/proposals/preview", headers=H, json={"type": card["type"], "payload": card["payload"]}).json()
+        self.assertIs(again["ok"], False)  # a second Apply (another tab) adds no second holding by the same name
+        self.assertIn("already have a holding with that name", again["reason"])
+
+    def test_a_failed_card_check_costs_only_the_cards(self):
+        self.setup_account()
+        nl = chr(10)
+        text = "The answer." + nl + nl + nl.join(["```moneylyzer-proposal", '{"type": "rules.add", "rule": "x", "reason": "y"}', "```"])
+        with mock.patch("analyzer.advisor.complete", return_value={"text": text, "model": "m", "sources": []}), \
+                mock.patch("analyzer.advisor.proposal_state", side_effect=RuntimeError("database is locked")):
+            r = self.client.post("/api/advisor/ask", headers=H, json={"question": "q"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["text"], r.json()["proposals"]), ("The answer.", []))
+        self.assertIn("couldn't be checked", r.json()["proposal_notes"][0])
 
     def test_change_cards_leave_no_trace_and_no_hidden_links(self):
         self.setup_account()
@@ -368,14 +403,14 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(self.client.get("/api/lookup", params={"q": "a"}).status_code, 422)
         self.assertEqual(self.client.get("/api/lookup", params={"q": "   "}).status_code, 422)
 
-        with mock.patch("server.main.live_quote", return_value={"price": 131.2, "currency": "EUR", "time": pd.Timestamp("2026-11-24 14:00", tz="UTC"), "error": None}):
+        with mock.patch("analyzer.market.live_quote", return_value={"price": 131.2, "currency": "EUR", "time": pd.Timestamp("2026-11-24 14:00", tz="UTC"), "error": None}):
             q = self.client.get("/api/quote", params={"symbol": "VWCE.DE"}).json()
         self.assertEqual((q["price"], q["currency"], q["divisor"]), (131.2, "EUR", 1.0))
         for raw, major in (("GBp", "GBP"), ("ZAc", "ZAR"), ("GBX", "GBP"), ("ILA", "ILS")):
-            with mock.patch("server.main.live_quote", return_value={"price": 7512.0, "currency": raw, "time": None, "error": None}):
+            with mock.patch("analyzer.market.live_quote", return_value={"price": 7512.0, "currency": raw, "time": None, "error": None}):
                 g = self.client.get("/api/quote", params={"symbol": "VUSA.L"}).json()
             self.assertEqual((g["currency"], g["quote_currency"], g["divisor"]), (major, raw, 100.0), raw)
-        with mock.patch("server.main.download_fund_nav", fake_fund):
+        with mock.patch("analyzer.market.download_fund_nav", fake_fund):
             f = self.client.get("/api/quote", params={"symbol": "fund:HU0000728670"}).json()
         self.assertEqual((f["price"], f["currency"], f["as_of"]), (3.289577, "HUF", "2026-11-20"))
         self.assertEqual(self.client.get("/api/quote", params={"symbol": "fund:nope"}).status_code, 400)

@@ -542,6 +542,16 @@ def latest_price_currencies() -> dict[str, str]:
     return {r["instrument_id"]: str(r["currency"]).strip() for r in rows}
 
 
+def latest_closes() -> dict[str, float]:
+    """Each instrument's most recent stored close, as quoted (one query; the primary key serves the MAX)."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT p.instrument_id, p.close FROM prices p JOIN (SELECT instrument_id, MAX(date) AS d FROM prices"
+            " GROUP BY instrument_id) last ON p.instrument_id = last.instrument_id AND p.date = last.d"
+        ).fetchall()
+    return {r["instrument_id"]: float(r["close"]) for r in rows}
+
+
 def get_platforms() -> list[str]:
     """Platforms used in purchases, most recently used first (suggestions for the next purchase)."""
     with connect() as conn:

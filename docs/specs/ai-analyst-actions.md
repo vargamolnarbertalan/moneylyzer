@@ -3,7 +3,8 @@
 Status: revision 3 · approved 2026-11-24, simplified 2026-11-25 ("simple, clear, not over-engineered").
 Part 1 is built (branch `feature/ai-awareness`). Part 2, phase 2 (cards for rules, preferences and the reporting
 currency) is built (2026-11-26, `analyzer/proposals.py`, `components/ai/ProposalCards.tsx`), with the text protocol on
-every provider; structured output for Claude login / the Claude API is not built yet. Phase 3 and Part 3 are next.
+every provider; structured output for Claude login / the Claude API is not built yet. Phase 3 (holdings,
+transactions, deletes, Apply all) is built too (2026-11-26) and also covers screenshot import: Part 3 was dropped.
 
 ## Why
 
@@ -73,10 +74,37 @@ same way.
 | `preferences.update` | any of horizon, risk, language, country; `notes_add` (≤ 300 chars) appends to the notes, which a card can never shorten or replace (built 2026-11-26) | `PUT /api/ai/settings` with only those keys (the server merges) |
 | `settings.base_currency` | currency | `PUT /api/settings` |
 | `holding.update` | name, asset type, notes; quantity / avg cost only for a holding without purchases | `POST /api/instruments?update=1` |
-| `purchase.add` | date, quantity, unit price (quote units), paid amount/currency, platform, notes | `POST /api/lots`; the card shows the unit and the resulting position, and warns when it is the first purchase of a holding without purchases |
+| `purchase.add` | date, quantity, unit price (quote units), paid amount/currency (default: the holding's), platform | `POST /api/lots`; the card shows the unit and the resulting position, and warns when it is the first purchase of a holding without purchases |
 | `holding.delete` / `purchase.delete` | the item | existing delete endpoints, behind the app's two-step confirm |
 
-A new holding is not a card: the answer points to Holdings → Add holding.
+A new holding is a card too (`holding.add`: name, type, symbol checked against Yahoo or the fund feed, which sets
+the currency and price divisor, or a currency without a symbol; units and average cost). Owner decision 2026-11-26:
+imports need it.
+
+**Many cards:** at most 5 per answer, or 25 when the question has files attached (an import). "Apply all" applies
+the pending cards in order, each re-checked like its own Apply, and stops at the first that fails or changed;
+deletions (rule removals included) are never part of it and always take a second click; nor are rules and
+preferences, which store text the analyst reads with every later question. One deletion per answer.
+
+**Cards that ask first (2026-11-26 security review):** a card that loses or overwrites something carries the
+server's `confirm` question and takes a second press ("Apply…", then "Yes, apply"), like a delete, and is never part
+of Apply all: a sale, fewer units, a replaced average cost, a rename, text added to a holding's notes (the analyst
+reads them later), a first transaction that changes the units on the holding, and a new holding whose average cost
+is over 30 times off its symbol's price (wrong unit, e.g. pence for pounds). The preview returns today's `confirm`,
+so a card can turn careful after its answer. Apply all compares a card without its `derived` rows (units held
+after), so several transactions of one holding apply in a row; a single Apply compares every row. Holding names are
+at most 80 characters; a holding's notes card stores the notes it was made against, and today's notes must still be
+exactly those (a second apply, or a card made before the user cut them, adds nothing).
+A duplicate transaction block is named in a note (two identical trades are possible). Adjust sends only a holding
+card's summary, never its amounts. Symbol checks run side by side for at most 20 s; a symbol the price source
+couldn't be asked about (checked by whether the source answers at all, since yfinance reports a dropped connection
+as a missing price) says so instead of "no price", and its card keeps its Apply button. A found quote is reused for
+5 minutes, so Apply all over an import doesn't ask the source again. An answer's cards are checked in order, each
+against the state the earlier ones leave, so their rows are what applying them in order does, and a second card for
+the same new holding is refused in the answer. Symbols must look like a Yahoo ticker or fund:<ISIN>. Review 3: a
+first transaction that replaces a holding's recorded average cost asks first; a holding with no stored close yet is
+checked against its quote; a card compares and shows the preview's summary (a reused id shows a different holding);
+one card's Apply runs at a time per answer; a new holding's id is fixed in its card.
 
 **Never proposable:** sharing level, AI models and keys, web research, short-term trading, direct recommendations, persona, password and account,
 disclaimer, backups and imports, view preferences, price feed. No schema exists for them.
@@ -89,27 +117,13 @@ before → after for every change, short limits on stored text, the two-step con
 
 ---
 
-## Part 3 — Screenshot import
+## Part 3 — Screenshot import (dropped 2026-11-26)
 
-1. Import → **From a screenshot**: pick or paste one PNG, JPEG or WebP; choose the model. The page says: "This image goes
-   to <model>. Crop out account numbers and names first."
-2. The browser re-encodes the image (drops EXIF, downsizes, refuses very tall captures) and keeps it to show beside the
-   review table.
-3. `POST /api/import/screenshot` with the raw image (≤ 5 MiB, read into memory, never written to disk). The model is
-   called with no tools, an extraction prompt and a JSON schema: one row per position, `null` for anything not visible.
-4. **Review table:** each row matched to an existing holding by name, symbol and currency. Rows: Update existing
-   (unticked by default, before → after), Add new (opens Add holding pre-filled), Skip.
-5. **Save** writes the ticked rows in order and stops at the first error, showing which rows were saved.
-
-**Providers:** Claude API (image block + structured output); OpenAI-compatible (sent as an image; if the model can't read
-images, its error is shown); Claude login only if a probe shows `claude -p --input-format stream-json` accepts an image
-block, otherwise not offered there.
-
-**Data & privacy entry:** "The cropped image goes to the model you chose. Moneylyzer doesn't store it; the provider keeps
-it under its own policy."
-
-**Failures:** not a holdings table, unreadable cells (row blocked until filled or skipped), provider error or refusal
-(image discarded, nothing saved), too large (refused in the browser).
+Owner decision: no separate import screen. The user attaches the broker screenshot or statement to a question in
+the AI analyst (attachments: images and PDFs to models that read them, nothing stored) and asks to import it; the
+answer's change cards (`holding.add`, `holding.update`, `purchase.add`) are the review table, and Apply all is the
+Save. The prompt tells the model to match positions to existing holdings first, to add transactions only when a
+date is shown, and never to invent a figure.
 
 ---
 
@@ -119,8 +133,8 @@ it under its own policy."
 |---|---|---|
 | 1 | Awareness | done |
 | 2 | Cards for rules, preferences, base currency | 1 day |
-| 3 | Cards for holdings and purchases, deletes | 1 day |
-| 4 | Screenshot import (API and OpenAI-compatible first, then the Claude login probe) | 2 days |
+| 3 | Cards for holdings and purchases, deletes, Apply all (built 2026-11-26) | 1 day |
+| 4 | ~~Screenshot import~~: covered by phase 3 and attachments | - |
 
 Tests per phase: proposal parsing (malformed, unknown type, forbidden field, too many, two deletes), apply on a changed
 item, screenshot parsing against recorded outputs (no live model in CI), and no image bytes on disk after an import.

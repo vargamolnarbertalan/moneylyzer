@@ -7,6 +7,7 @@ import numbers
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -303,6 +304,26 @@ def _http(url: str, data: dict | None = None) -> bytes:
     request = urllib.request.Request(url, data=body, headers={"User-Agent": "moneylyzer"})
     with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
         return response.read()
+
+
+def yahoo_chart_url(symbol: str) -> str:
+    """The chart endpoint yfinance reads quotes from (404 for a symbol Yahoo doesn't know)."""
+    return "https://query1.finance.yahoo.com/v8/finance/chart/" + urllib.parse.quote(symbol, safe="")
+
+
+def reachable(url: str) -> bool:
+    """Whether the endpoint answers normally. Tells "the source has no price for this" from "the source couldn't
+    be asked": yfinance reports both as a missing price. A 4xx answer is an answer; too many requests (429) or a
+    server error (5xx) is not. A HEAD request: no body is downloaded."""
+    try:
+        request = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "moneylyzer"})
+        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS):
+            return True
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        return exc.code != 429 and exc.code < 500
+    except Exception:
+        return False
 
 
 def parse_otp_nav(payload: bytes) -> pd.DataFrame:

@@ -13,12 +13,15 @@ import json
 import logging
 import math
 import re
+import threading
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, wait as wait_futures
 from datetime import datetime, timezone
 
 import pandas as pd
 
-from analyzer import attachments, db, proposals, research, secrets_store
+from analyzer import attachments, db, proposals, research, secrets_store, symbols
 from analyzer.engine import analyze_history
 from analyzer.llm import Provider, applied_effort, complete, takes_effort, validate
 from analyzer.persona import DEFAULT_PERSONA, compose_system_prompt, normalize_preferences, normalize_rules
@@ -176,10 +179,118 @@ def get_settings() -> dict:
             "default_persona": DEFAULT_PERSONA, "preferences": prefs, "rules": rules}
 
 
+def _num_or(value, default=None):
+    return default if value is None or (isinstance(value, float) and math.isnan(value)) else float(value)
+
+
+def _holdings_state() -> dict:
+    """Every holding with its transactions and the units it holds now (as proposals.py reads them)."""
+    lots = db.get_lots()
+    by_id: dict[str, list[dict]] = {}
+    for lot in lots.to_dict("records"):
+        by_id.setdefault(lot["instrument_id"], []).append(
+            {"lot_id": int(lot["lot_id"]), "date": str(lot["buy_date"]), "side": lot.get("side") or "buy",
+             "quantity": float(lot["quantity"]), "unit_price": _num_or(lot["unit_price"], 0.0)})
+    out, closes = {}, db.latest_closes()
+    for r in db.get_instruments().to_dict("records"):
+        entries = by_id.get(r["instrument_id"], [])
+        record = _num_or(r.get("quantity"), 0.0)
+        units = sum(e["quantity"] if e["side"] == "buy" else -e["quantity"] for e in entries) if entries else record
+        out[r["instrument_id"]] = {
+            "name": r["name"], "type": r["asset_type"], "currency": r["currency"],
+            "symbol": _text_or_none(r.get("market_symbol")) or "", "quantity": record,
+            "avg_cost": _num_or(r.get("avg_cost")), "notes": _text_or_none(r.get("notes")) or "",
+            "price_divisor": _num_or(r.get("price_divisor"), 1.0), "units": units, "lots": entries,
+            "last_price": closes.get(r["instrument_id"])}  # as quoted: the far-off-cost check of update/purchase cards
+    return out
+
+
+QUOTE_CACHE_SECONDS = 300.0  # a symbol's quote, once found, serves the answer's cards and their Apply presses
+_quote_cache: dict[str, tuple[float, dict]] = {}
+_quote_cache_lock = threading.Lock()
+
+
+def _cached_quote(symbol: str) -> dict:
+    """symbols.quote_symbol, remembered for QUOTE_CACHE_SECONDS when it finds a price (never a refusal: the symbol
+    may be fine a moment later). Apply all over an import re-checks every card; without this each would ask the
+    price source again, one after another."""
+    key = symbol.upper()
+    with _quote_cache_lock:
+        hit = _quote_cache.get(key)
+        if hit and time.monotonic() - hit[0] < QUOTE_CACHE_SECONDS:
+            return hit[1]
+    quote = symbols.quote_symbol(symbol)
+    with _quote_cache_lock:
+        _quote_cache[key] = (time.monotonic(), quote)
+    return quote
+
+
 def proposal_state(settings: dict | None = None) -> dict:
-    """What change cards are checked against: the settings they may change, as they are now."""
+    """What change cards are checked against: the settings, holdings and transactions they may change, as they
+    are now, and a symbol check for new holdings (network; one verdict per symbol for this state). Once
+    `state["frozen"]` is set (after _prefetch_quotes), a symbol not checked yet gets "couldn't be checked" without
+    a network call, so nothing in an answer's card check waits on the network beyond the prefetch's limit."""
     settings = settings or get_settings()
-    return {"rules": settings["rules"], "preferences": settings["preferences"], "base_currency": db.base_currency()}
+    quotes: dict[str, dict | Exception] = {}
+    state: dict = {"rules": settings["rules"], "preferences": settings["preferences"], "base_currency": db.base_currency(),
+                   "holdings": _holdings_state(), "quotes": quotes, "frozen": False}
+
+    def quote(symbol: str) -> dict:
+        key = symbol.strip().upper()
+        if key not in quotes:
+            if state["frozen"]:
+                hit = symbols.SymbolError("The symbol wasn't checked in time.", 503)
+            else:
+                try:
+                    hit = _cached_quote(symbol)
+                except symbols.SymbolError as exc:
+                    hit = exc
+                except Exception as exc:  # unexpected trouble: refused as "couldn't be checked", never fails the answer
+                    hit = symbols.SymbolError(str(exc), 503)
+            # setdefault: a quote that came back after _prefetch_quotes gave up on it doesn't replace that verdict,
+            # so every card of one answer sees the same answer for a symbol
+            quotes.setdefault(key, hit)
+        hit = quotes[key]
+        if isinstance(hit, Exception):
+            raise hit
+        return hit
+
+    state["quote"] = quote
+    return state
+
+
+PREFETCH_SECONDS = 20.0  # an import's symbol checks, all together; the answer waits no longer than this for them
+
+
+def _prefetch_quotes(text: str, state: dict, limit: int) -> None:
+    """Check the symbols of proposed new holdings side by side (an import may name 20), not one after another, and
+    only those of the blocks parse() will read (the first `limit`), cleaned as the cards clean them. Symbols still
+    unanswered after PREFETCH_SECONDS are remembered as "couldn't be checked right now", and the state is frozen:
+    the card check then asks nothing more of the network."""
+    try:
+        wanted = proposals.symbols_to_check(text, state, limit)  # the cards' own in-order check, quotes stood in
+    except Exception:
+        wanted = []
+    try:
+        if not wanted:
+            return
+
+        def one(symbol: str) -> None:
+            try:
+                state["quote"](symbol)
+            except Exception:
+                pass  # remembered as refused; the card check reports it
+
+        pool = ThreadPoolExecutor(max_workers=min(8, len(wanted)))  # no `with`: its exit would wait for every check
+        try:
+            futures = [pool.submit(one, s) for s in wanted]
+            wait_futures(futures, timeout=PREFETCH_SECONDS)
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
+        for symbol in wanted:
+            state["quotes"].setdefault(symbol.upper(), symbols.SymbolError("The price source didn't answer in time.", 503))
+    finally:
+        state["frozen"] = True
 
 
 class ProposalDone(ValueError):
@@ -358,7 +469,15 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}], attachments=parts)
     # Change cards the model proposed: out of the text, checked, before -> after from the current settings.
     raw = result["text"]
-    text, cards, notes = proposals.parse(raw, proposal_state(settings))
+    limit = proposals.MAX_IMPORT_PROPOSALS if parts else proposals.MAX_PROPOSALS  # files: an import (a screenshot)
+    try:
+        state = proposal_state(settings)
+        _prefetch_quotes(raw, state, limit)
+        text, cards, notes = proposals.parse(raw, state, limit)
+    except Exception as exc:  # the answer was paid for: a failed card check (database, threads) costs only the cards
+        log.warning("could not check the suggested changes: %s", type(exc).__name__)
+        text, cards = proposals.extract(raw)[0], []
+        notes = ["The suggested changes couldn't be checked, so none are shown as buttons."] if proposals.extract(raw)[1] else []
     # a link that stood only inside a removed block was never shown in the answer: it is no source either
     sources = [s for s in result.get("sources") or [] if s.get("url", "") in text or s.get("url", "") not in raw]
     answer = {**result, "text": text, "sources": sources, "proposals": cards, "proposal_notes": notes,

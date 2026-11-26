@@ -431,11 +431,24 @@ export interface AdvisorSource {
  *  when the answer came; the card re-checks them (endpoints.proposalPreview) before applying. */
 export interface ProposalCard {
   id: string;
-  type: "rules.add" | "rules.remove" | "preferences.update" | "settings.base_currency";
-  payload: { rule?: string; changes?: Partial<Preferences>; currency?: string };
+  type:
+    | "rules.add"
+    | "rules.remove"
+    | "preferences.update"
+    | "settings.base_currency"
+    | "holding.add"
+    | "holding.update"
+    | "purchase.add"
+    | "holding.delete"
+    | "purchase.delete";
+  /** The card in the form the server re-checks it (endpoints.proposalPreview); opaque to the browser for holdings. */
+  payload: { rule?: string; changes?: Partial<Preferences>; currency?: string; [key: string]: unknown };
   summary: string;
   reason: string;
   changes: ProposalChange[];
+  /** The question to ask before a second press: a delete, or a change that loses or overwrites something. Such a
+   *  card is never part of "Apply all"; the preview says whether it (still) asks. */
+  confirm?: string;
   status: "pending" | "applied" | "dismissed" | "adjusted";
 }
 
@@ -444,11 +457,25 @@ export interface ProposalChange {
   /** null: nothing before (a new rule) or nothing after (a removed rule). */
   before: Nullable<string>;
   after: Nullable<string>;
+  /** Follows from other cards on the same holding (units held after a transaction): "Apply all" doesn't compare it. */
+  derived?: boolean;
 }
 
+/** The body for the app's own endpoint, built by the server from today's state (holdings and transactions). */
+export type ProposalApply = Partial<InstrumentInput> &
+  Partial<LotInput> & { instrument_id?: string; confirm_purchases?: number; lot_id?: number };
+
 export type ProposalPreview =
-  | { ok: true; summary: string; changes: ProposalChange[]; payload: ProposalCard["payload"] }
-  | { ok: false; reason: string };
+  | {
+      ok: true;
+      summary: string;
+      changes: ProposalChange[];
+      payload: ProposalCard["payload"];
+      apply: Nullable<ProposalApply>;
+      confirm: Nullable<string>;
+    }
+  /** retry: the price source didn't answer; the same card may work in a moment. */
+  | { ok: false; reason: string; retry?: boolean };
 
 export interface AdvisorAnswer {
   text: string;

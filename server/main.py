@@ -21,12 +21,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from analyzer import advisor, attachments, db, llm, prefs, proposals, research
+from analyzer import advisor, attachments, db, llm, prefs, proposals, research, symbols
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
-from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
+from analyzer.engine import analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
 from analyzer.portfolio import RateBook, intraday_value_history, value_history
 from analyzer.risk import risk_report
-from analyzer.market import COMMON_CURRENCIES, CURRENCY_RE, download_fund_nav, download_intraday, fund_isin, fx_symbol, live_quote, search_instruments
+from analyzer.market import COMMON_CURRENCIES, CURRENCY_RE, download_intraday, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
 from server import __version__, auth, claude_login
@@ -567,34 +567,13 @@ async def lookup(q: str = Query(min_length=2, max_length=60), user: str = Depend
 
 
 
-def _quote_out(price: float, raw_ccy: str | None, as_of: str | None, source: str) -> dict:
-    """{price (as quoted), currency (major), quote_currency (as quoted), divisor, as_of, source}."""
-    raw = (raw_ccy or "").strip()
-    major, divisor = MINOR_UNITS.get(raw, (raw.upper() or None, 1.0))
-    return {"price": price, "currency": major, "quote_currency": raw or None, "divisor": divisor,
-            "as_of": as_of, "source": source}
-
-
 @app.get("/api/quote")
 async def quote(symbol: str = Query(min_length=1, max_length=64), user: str = Depends(auth.require_user)):
-    """Price preview for a symbol before it is saved (see _quote_out)."""
-    symbol = symbol.strip()
-    isin = fund_isin(symbol)
-    if isin:
-        start = (pd.Timestamp.today() - pd.Timedelta(days=21)).date().isoformat()
-        frame, source, error = await asyncio.to_thread(download_fund_nav, isin, start)
-        if error or frame.empty:
-            raise HTTPException(404, error or f"No recent price for {isin}.")
-        last = frame.sort_values("date").iloc[-1]
-        return _quote_out(float(last["close"]), str(last["currency"]), pd.Timestamp(last["date"]).date().isoformat(), source)
-    if not is_yahoo_symbol(symbol):
-        raise HTTPException(400, "Use a Yahoo ticker such as VWCE.DE, or fund:<ISIN> for a Hungarian fund.")
-    q = await asyncio.to_thread(live_quote, symbol)
-    if not q.get("price"):
-        raise HTTPException(404, q.get("error") or f"No price for {symbol}.")
-    when = q.get("time")
-    return _quote_out(float(q["price"]), q.get("currency"), pd.Timestamp(when).isoformat() if when is not None else None,
-                      "Yahoo Finance")
+    """Price preview for a symbol before it is saved (analyzer/symbols.py; AI "add a holding" cards use it too)."""
+    try:
+        return await asyncio.to_thread(symbols.quote_symbol, symbol)
+    except symbols.SymbolError as exc:
+        raise HTTPException(exc.status, str(exc)) from None
 
 
 @app.delete("/api/lots/{lot_id}")
