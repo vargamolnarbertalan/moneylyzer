@@ -185,6 +185,11 @@ def live_quote(symbol: str) -> dict:
 
 
 CURRENCY_RE = re.compile(r"[A-Z]{3}")
+# The reporting currencies offered in Settings (and the only ones the AI analyst may propose), in neutral order
+# (widely used first); the reporting currency goes first wherever a list is shown. Keep in step with
+# frontend/src/currencies.ts.
+COMMON_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF",
+                     "RON"]
 
 
 def fx_symbol(currency: str) -> str:

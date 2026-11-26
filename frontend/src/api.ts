@@ -427,8 +427,34 @@ export interface AdvisorSource {
   url: string;
 }
 
+/** A change the AI analyst suggested (server: analyzer/proposals.py). `changes` were computed from the settings
+ *  when the answer came; the card re-checks them (endpoints.proposalPreview) before applying. */
+export interface ProposalCard {
+  id: string;
+  type: "rules.add" | "rules.remove" | "preferences.update" | "settings.base_currency";
+  payload: { rule?: string; changes?: Partial<Preferences>; currency?: string };
+  summary: string;
+  reason: string;
+  changes: ProposalChange[];
+  status: "pending" | "applied" | "dismissed" | "adjusted";
+}
+
+export interface ProposalChange {
+  label: string;
+  /** null: nothing before (a new rule) or nothing after (a removed rule). */
+  before: Nullable<string>;
+  after: Nullable<string>;
+}
+
+export type ProposalPreview =
+  | { ok: true; summary: string; changes: ProposalChange[]; payload: ProposalCard["payload"] }
+  | { ok: false; reason: string };
+
 export interface AdvisorAnswer {
   text: string;
+  /** Change cards from this answer, and a note per suggestion that couldn't become one. */
+  proposals?: ProposalCard[];
+  proposal_notes?: string[];
   model: string;
   sources: AdvisorSource[];
   provider: { id: string; name: string; kind: ProviderKind };
@@ -436,6 +462,9 @@ export interface AdvisorAnswer {
   effort?: Effort | null;
   shared: AdvisorShared;
 }
+
+/** What a saved or shown answer keeps besides its text. */
+export type AnswerMeta = Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared" | "proposals" | "proposal_notes">;
 
 /** A saved AI analyst conversation in the Recent list (no messages). */
 export interface ConversationSummary {
@@ -454,7 +483,7 @@ export interface SavedConversation {
   title: string;
   provider_id: Nullable<string>;
   updated_at: string;
-  messages: { id: string; role: "user" | "assistant"; content: string; files?: AttachedFile[]; meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared"> }[];
+  messages: { id: string; role: "user" | "assistant"; content: string; files?: AttachedFile[]; meta?: AnswerMeta }[];
 }
 
 export interface MarketItem {
@@ -653,6 +682,10 @@ export const endpoints = {
   risk: (range: "1Y" | "3Y") => api.get<RiskReport>(`/api/risk?range=${range}`),
   conversations: () => api.get<ConversationSummary[]>("/api/advisor/conversations"),
   conversation: (id: string) => api.get<SavedConversation>(`/api/advisor/conversations/${encodeURIComponent(id)}`),
+  proposalPreview: (type: ProposalCard["type"], payload: ProposalCard["payload"]) =>
+    api.post<ProposalPreview>("/api/advisor/proposals/preview", { type, payload }),
+  proposalStatus: (conversationId: string, proposalId: string, status: Exclude<ProposalCard["status"], "pending">) =>
+    api.post<{ ok: true }>(`/api/advisor/conversations/${encodeURIComponent(conversationId)}/proposals/${encodeURIComponent(proposalId)}`, { status }),
   deleteConversation: (id: string) => api.del<{ ok: boolean }>(`/api/advisor/conversations/${encodeURIComponent(id)}`),
   deleteAllConversations: () => api.del<{ deleted: number }>("/api/advisor/conversations"),
 };

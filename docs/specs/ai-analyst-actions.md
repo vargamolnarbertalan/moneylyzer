@@ -1,7 +1,9 @@
 # Spec: AI analyst — app awareness, approved changes, screenshot import
 
 Status: revision 3 · approved 2026-11-24, simplified 2026-11-25 ("simple, clear, not over-engineered").
-Part 1 is built (branch `feature/ai-awareness`); Parts 2 and 3 are next.
+Part 1 is built (branch `feature/ai-awareness`). Part 2, phase 2 (cards for rules, preferences and the reporting
+currency) is built (2026-11-26, `analyzer/proposals.py`, `components/ai/ProposalCards.tsx`), with the text protocol on
+every provider; structured output for Claude login / the Claude API is not built yet. Phase 3 and Part 3 are next.
 
 ## Why
 
@@ -68,7 +70,7 @@ same way.
 | Type | Fields | Applied through |
 |---|---|---|
 | `rules.add` / `rules.remove` | rule text; remove by number (1-based) and text | `PUT /api/ai/settings` with `rules_expected` |
-| `preferences.update` | any of horizon, risk, language, country, notes (≤ 300 chars) | `PUT /api/ai/settings` with only those keys (the server merges) |
+| `preferences.update` | any of horizon, risk, language, country; `notes_add` (≤ 300 chars) appends to the notes, which a card can never shorten or replace (built 2026-11-26) | `PUT /api/ai/settings` with only those keys (the server merges) |
 | `settings.base_currency` | currency | `PUT /api/settings` |
 | `holding.update` | name, asset type, notes; quantity / avg cost only for a holding without purchases | `POST /api/instruments?update=1` |
 | `purchase.add` | date, quantity, unit price (quote units), paid amount/currency, platform, notes | `POST /api/lots`; the card shows the unit and the resulting position, and warns when it is the first purchase of a holding without purchases |
@@ -78,6 +80,8 @@ A new holding is not a card: the answer points to Holdings → Add holding.
 
 **Never proposable:** sharing level, AI models and keys, web research, short-term trading, direct recommendations, persona, password and account,
 disclaimer, backups and imports, view preferences, price feed. No schema exists for them.
+
+**Built safeguards (2026-11-26 review):** card text with invisible characters (format, private-use, unassigned, control) is refused, and saved rules and preferences drop them; notes never repeat the model's text; a malformed block never costs the answer; links that stood only inside a removed block are not shown as sources; one `rules.remove` per answer; an applied card stays applied.
 
 **Prompt injection:** cards can appear in any answer, so the defences are the allow-list, a click on a visible
 before → after for every change, short limits on stored text, the two-step confirm on deletes, and a guardrail line

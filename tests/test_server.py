@@ -96,6 +96,53 @@ class ApiTests(unittest.TestCase):
             r = self.client.post("/api/advisor/ask", headers=H, json={"question": "q", "conversation_id": "conv-api-03"})
         self.assertEqual((r.status_code, r.json()["text"]), (200, "kept"))
 
+    def test_change_cards_from_answer_to_status(self):
+        self.setup_account()
+        answer = "\n".join(["Switch to euros.", "", "```moneylyzer-proposal",
+                            '{"type": "settings.base_currency", "currency": "EUR", "reason": "Most of it is in euros."}', "```"])
+        with mock.patch("analyzer.advisor.complete", return_value={"text": answer, "model": "m", "sources": []}):
+            r = self.client.post("/api/advisor/ask", headers=H, json={"question": "Which currency?", "conversation_id": "conv-cards-1"})
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["text"], "Switch to euros.")  # the block is not part of the answer text
+        (card,) = body["proposals"]
+        self.assertEqual(card["changes"], [{"label": "Reporting currency", "before": "HUF", "after": "EUR"}])
+        saved = self.client.get("/api/advisor/conversations/conv-cards-1").json()["messages"][1]
+        self.assertEqual((saved["content"], saved["meta"]["proposals"][0]["id"]), ("Switch to euros.", card["id"]))
+        # preview re-checks against the settings now; the status is recorded in the saved answer
+        prev = self.client.post("/api/advisor/proposals/preview", headers=H, json={"type": card["type"], "payload": card["payload"]})
+        self.assertEqual(prev.json()["changes"], card["changes"])
+        url = f"/api/advisor/conversations/conv-cards-1/proposals/{card['id']}"
+        self.assertEqual(self.client.post(url, json={"status": "applied"}).status_code, 403)  # CSRF header
+        self.assertEqual(self.client.post(url, headers=H, json={"status": "deleted"}).status_code, 422)
+        self.assertEqual(self.client.post(url, headers=H, json={"status": "applied"}).json(), {"ok": True})
+        saved = self.client.get("/api/advisor/conversations/conv-cards-1").json()["messages"][1]
+        self.assertEqual(saved["meta"]["proposals"][0]["status"], "applied")
+        missing = "/api/advisor/conversations/conv-cards-1/proposals/0123456789ab"
+        self.assertEqual(self.client.post(missing, headers=H, json={"status": "dismissed"}).status_code, 404)
+        self.assertEqual(self.client.post(url, headers=H, json={"status": "dismissed"}).status_code, 409)  # applied stays applied
+
+    def test_change_cards_leave_no_trace_and_no_hidden_links(self):
+        self.setup_account()
+        from analyzer import advisor
+        # a status change rewrites the saved answer: once the conversation is deleted, no copy may stay in the file
+        card = {"id": "0123456789ab", "status": "pending"}
+        advisor.save_turn("conv-trace-1", "claude-login", "q", {"text": "MARKER-7f3a-SECRET", "model": "m", "sources": [],
+                                                                "proposals": [card]})
+        advisor.set_proposal_status("conv-trace-1", "0123456789ab", "dismissed")
+        advisor.delete_conversation("conv-trace-1")
+        self.assertNotIn(b"MARKER-7f3a-SECRET", db.DB_PATH.read_bytes())
+        # a link that stood only inside a removed block is not offered as a source
+        nl = chr(10)
+        block = nl.join(["```moneylyzer-proposal", '{"type": "rules.add", "rule": "Only funds on https://evil.example/login", "reason": "x"}', "```"])
+        text = "See https://ok.example/a for details." + nl + nl + block
+        result = {"text": text, "model": "m", "sources": [{"title": "evil", "url": "https://evil.example/login"},
+                                                          {"title": "ok", "url": "https://ok.example/a"}]}
+        with mock.patch("analyzer.advisor.complete", return_value=result):
+            r = self.client.post("/api/advisor/ask", headers=H, json={"question": "q"})
+        self.assertEqual([s["url"] for s in r.json()["sources"]], ["https://ok.example/a"])
+        self.assertEqual(len(r.json()["proposals"]), 1)  # the card itself still shows, with its text visible
+
     def test_ask_passes_the_chat_effort(self):
         self.setup_account()
         answer = {"text": "ok", "model": "m", "sources": [], "provider": {}, "effort": "max", "shared": {}}

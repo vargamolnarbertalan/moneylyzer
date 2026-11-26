@@ -2887,6 +2887,76 @@ input[type="radio"],
   text-align: center;
   max-width: 46ch;
 }
+/* AI change cards (components/ai/ProposalCards.tsx): what would change, then Apply / Adjust / Dismiss. */
+.prop-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.prop-card {
+  padding: 10px 12px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-solid) 70%, transparent);
+}
+.prop-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+}
+.prop-head svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+.prop-card.applied .prop-head svg {
+  color: var(--up);
+}
+.prop-status {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+}
+.prop-rows {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.prop-rows li {
+  display: grid;
+  gap: 1px;
+  overflow-wrap: anywhere;
+}
+.prop-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.prop-before {
+  color: var(--muted);
+}
+.prop-after {
+  font-weight: 600;
+}
+.prop-gone {
+  color: var(--down);
+  font-weight: 600;
+}
+.prop-reason {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.prop-warn {
+  margin: 6px 0 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.prop-card.done .prop-rows {
+  opacity: 0.75;
+}
 .msg-tools {
   display: flex;
   flex-wrap: wrap;

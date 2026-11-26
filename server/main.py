@@ -21,12 +21,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from analyzer import advisor, attachments, db, llm, prefs, research
+from analyzer import advisor, attachments, db, llm, prefs, proposals, research
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
 from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
 from analyzer.portfolio import RateBook, intraday_value_history, value_history
 from analyzer.risk import risk_report
-from analyzer.market import CURRENCY_RE, download_fund_nav, download_intraday, fund_isin, fx_symbol, live_quote, search_instruments
+from analyzer.market import COMMON_CURRENCIES, CURRENCY_RE, download_fund_nav, download_intraday, fund_isin, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
 from server import __version__, auth, claude_login
@@ -346,10 +346,6 @@ async def stream(request: Request, user: str = Depends(auth.require_user)):
 
 
 # ---------------------------------------------------------------- settings (reporting currency)
-# Neutral order (widely used first); the reporting currency goes first wherever a list is shown.
-# Keep in step with frontend/src/currencies.ts.
-COMMON_CURRENCIES = ["EUR", "USD", "GBP", "CHF", "JPY", "CAD", "AUD", "CNY", "SEK", "NOK", "DKK", "PLN", "CZK", "HUF",
-                     "RON"]
 
 
 class AppSettingsBody(BaseModel):
@@ -956,6 +952,35 @@ def advisor_conversation_delete(conversation_id: str = CONVERSATION_ID, user: st
 @app.delete("/api/advisor/conversations")
 def advisor_conversations_delete_all(user: str = Depends(auth.require_user)):
     return {"deleted": advisor.delete_conversation(None)}
+
+
+# Change cards (analyzer/proposals.py). The browser applies a card through the app's own endpoints; these two only
+# re-check a card against the current settings and record what became of it.
+class ProposalPreviewBody(BaseModel):
+    type: str = Field(max_length=40)
+    payload: dict
+
+
+class ProposalStatusBody(BaseModel):
+    status: Literal["applied", "dismissed", "adjusted"]
+
+
+@app.post("/api/advisor/proposals/preview")
+def advisor_proposal_preview(body: ProposalPreviewBody, user: str = Depends(auth.require_user)):
+    """Read-only: the card's before -> after as things stand now, or why it can't be applied any more."""
+    return proposals.preview(body.type, body.payload, advisor.proposal_state())
+
+
+@app.post("/api/advisor/conversations/{conversation_id}/proposals/{proposal_id}")
+def advisor_proposal_status(body: ProposalStatusBody, conversation_id: str = CONVERSATION_ID,
+                            proposal_id: str = PathParam(pattern=r"^[0-9a-f]{12}$"), user: str = Depends(auth.require_user)):
+    try:
+        advisor.set_proposal_status(conversation_id, proposal_id, body.status)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from None
+    except advisor.ProposalDone as exc:
+        raise HTTPException(409, str(exc)) from None
+    return {"ok": True}
 
 
 @app.get("/api/research")

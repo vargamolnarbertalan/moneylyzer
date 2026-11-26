@@ -5,7 +5,8 @@ import { AI_ANSWER_NOTE } from "../legal";
 import { MAX_QUESTION, QUICK_PROMPTS, QUICK_PROMPTS_SHOWN, clearChat, conversationLevel, conversationMarkdown, freshChat, historyBefore, loadChat, memoryStart, newId, safeUrl, saveChat, takeQueuedQuestion, type Chat, type ChatMessage } from "../advisor";
 import { copyText, downloadText } from "../clipboard";
 import { MAX_FILES, MAX_TOTAL_BYTES, addFiles, fileSize, type PendingFile } from "../attachments";
-import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type Provider } from "../api";
+import { ApiError, FULL_DETAIL_ITEMS, RELATIVE_ITEMS, endpoints, errorMessage, type Effort, type ProposalCard, type Provider } from "../api";
+import { ProposalCards, adjustPrefix, type CardStatus } from "../components/ai/ProposalCards";
 import { effortPhrase } from "../effort";
 import { ModelMenu, chatModel, withEffort } from "../components/ai/ChatPickers";
 import { Alert } from "../components/Alert";
@@ -129,7 +130,7 @@ export function AdvisorPage() {
         setChat((c) => ({
           ...c,
           providerId: c.providerId ?? res.provider.id, // later questions go to the model that answered, not a new default
-          messages: [...c.messages, { id: newId(), role: "assistant", content: res.text, meta: { provider: res.provider, model: res.model, effort: res.effort ?? null, sources: res.sources ?? [], shared: res.shared } }],
+          messages: [...c.messages, { id: newId(), role: "assistant", content: res.text, meta: { provider: res.provider, model: res.model, effort: res.effort ?? null, sources: res.sources ?? [], shared: res.shared, proposals: res.proposals ?? [], proposal_notes: res.proposal_notes ?? [] } }],
         }));
       } catch (err) {
         setFailure(errorMessage(err));
@@ -155,6 +156,8 @@ export function AdvisorPage() {
         chatRef.current = freshChat(null);
         setChat(chatRef.current);
       }
+      for (const a of adjusting.current.filter((x) => question.includes(x.prefix.trim()))) setCardStatus(a.messageId, a.cardId, "adjusted");
+      adjusting.current = adjusting.current.filter((x) => !question.includes(x.prefix.trim()));
       const before = chatRef.current.messages;
       const turnId = newId();
       const sending = filesRef.current;
@@ -169,6 +172,31 @@ export function AdvisorPage() {
     },
     [run, holdingId],
   );
+
+  // A change card's outcome: shown at once, and recorded in the saved answer (Recent) when there is one.
+  const setCardStatus = useCallback((messageId: string, cardId: string, status: CardStatus) => {
+    setChat((c) => ({
+      ...c,
+      messages: c.messages.map((x) =>
+        x.id === messageId && x.meta?.proposals ? { ...x, meta: { ...x.meta, proposals: x.meta.proposals.map((p) => (p.id === cardId ? { ...p, status } : p)) } } : x,
+      ),
+    }));
+    endpoints.proposalStatus(chatRef.current.conversationId, cardId, status).catch(() => {}); // not saved (yet): the chat keeps it
+  }, []);
+  // Adjust: the card's text goes after whatever is already typed; the card counts as adjusted once a question
+  // carrying that text is sent (a cleared box leaves it open).
+  const adjusting = useRef<{ messageId: string; cardId: string; prefix: string }[]>([]);
+  const adjust = useCallback((messageId: string, card: ProposalCard) => {
+    const prefix = adjustPrefix(card);
+    adjusting.current = [...adjusting.current.filter((a) => a.cardId !== card.id), { messageId, cardId: card.id, prefix }];
+    setDraft((d) => (d.trim() ? `${d.trimEnd()} ${prefix}` : prefix));
+    requestAnimationFrame(() => {
+      const area = areaRef.current;
+      if (!area) return;
+      area.focus();
+      area.setSelectionRange(area.value.length, area.value.length);
+    });
+  }, []);
 
   const retry = () => {
     const msgs = chatRef.current.messages;
@@ -378,7 +406,7 @@ export function AdvisorPage() {
                   ) : null}
                 </div>
               ) : (
-                <Answer m={m} />
+                <Answer m={m} onStatus={(id, status) => setCardStatus(m.id, id, status)} onAdjust={(card) => adjust(m.id, card)} />
               )}
             </Fragment>
           ))}
@@ -554,7 +582,7 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
-function Answer({ m }: { m: ChatMessage }) {
+function Answer({ m, onStatus, onAdjust }: { m: ChatMessage; onStatus: (cardId: string, status: CardStatus) => void; onAdjust: (card: ProposalCard) => void }) {
   const meta = m.meta;
   const sources = (meta?.sources ?? []).map((s) => ({ ...s, href: safeUrl(s.url) })).filter((s) => s.href);
   const shared = meta?.shared;
@@ -567,6 +595,7 @@ function Answer({ m }: { m: ChatMessage }) {
         </div>
       )}
       <Markdown source={m.content} />
+      <ProposalCards cards={meta?.proposals ?? []} notes={meta?.proposal_notes ?? []} onStatus={onStatus} onAdjust={onAdjust} />
       <div className="msg-tools">
         <p className="ai-note">{AI_ANSWER_NOTE}</p>
         <CopyButton text={m.content} />
