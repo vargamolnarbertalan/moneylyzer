@@ -200,6 +200,7 @@ export function HoldingsPage() {
     {
       key: "avg_cost",
       header: "Avg cost",
+      term: "avgCost",
       sortKey: "avg_cost",
       align: "right",
       className: "c-cost",

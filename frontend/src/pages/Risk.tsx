@@ -6,6 +6,7 @@ import { endpoints, type RiskHistory, type RiskHolding, type RiskReport } from "
 import { Alert } from "../components/Alert";
 import { AreaChart } from "../components/AreaChart";
 import { Card, CardHeader } from "../components/Card";
+import { Explain } from "../components/Explain";
 import { DataTable, type Column } from "../components/DataTable";
 import { Segmented } from "../components/Segmented";
 import { BlockSkeleton } from "../components/Skeleton";
@@ -108,16 +109,14 @@ function Concentration({ data }: { data: RiskReport }) {
           <div className="sub">of the value</div>
         </div>
         <div>
-          <div className="k">Effective holdings</div>
+          <div className="k">
+            Effective holdings <Explain term="effectiveHoldings" />
+          </div>
           <div className="mid">{fixed2(c.effective)}</div>
           <div className="sub">of {c.holdings} by weight</div>
         </div>
       </div>
-      <p className="note">
-        Effective holdings: how many equal-sized holdings would spread the money as evenly (1 ÷ the sum of squared weights). Far below the
-        number you hold means a few holdings carry most of the value.
-        {data.unvalued.length > 0 && ` Left out, no price or exchange rate yet: ${data.unvalued.join(", ")}.`}
-      </p>
+      {data.unvalued.length > 0 && <p className="note">Left out, no price or exchange rate yet: {data.unvalued.join(", ")}.</p>}
     </Card>
   );
 }
@@ -125,7 +124,7 @@ function Concentration({ data }: { data: RiskReport }) {
 function Exposure({ data }: { data: RiskReport }) {
   return (
     <Card as="section" aria-labelledby="exp-h">
-      <CardHeader id="exp-h" title="Exposure" />
+      <CardHeader id="exp-h" title="Exposure" term="exposure" />
       <div className="risk-exposure">
         <ShareBars title="By currency" rows={data.exposure.currency.map((x) => ({ label: x.key === "HUF" ? "HUF (Ft)" : x.key, weight: x.weight }))} />
         <ShareBars title="By asset type" rows={data.exposure.type.map((x) => ({ label: typeLabel(x.key), weight: x.weight }))} />
@@ -168,7 +167,7 @@ function History({ data, range, setRange, loading }: { data: RiskReport; range: 
   return (
     <>
       <Card as="section" aria-labelledby="hist-h">
-        <CardHeader id="hist-h" title="How today's mix would have moved" aside={<Segmented label="Risk range" options={RANGES} value={range} onChange={setRange} />} />
+        <CardHeader id="hist-h" title="How today's mix would have moved" term="riskHistory" aside={<Segmented label="Risk range" options={RANGES} value={range} onChange={setRange} />} />
         {h.error ? (
           <>
             <div className="chart-empty">{h.error}</div>
@@ -178,12 +177,16 @@ function History({ data, range, setRange, loading }: { data: RiskReport; range: 
           <>
             <div className={loading ? "risk-kpis five busy" : "risk-kpis five"} aria-busy={loading}>
               <div>
-                <div className="k">Volatility</div>
+                <div className="k">
+                  Volatility <Explain term="volatility" />
+                </div>
                 <div className="mid">{plainPct(h.volatility)}</div>
                 <div className="sub">a year, typical swing</div>
               </div>
               <div>
-                <div className="k">Largest fall</div>
+                <div className="k">
+                  Largest fall <Explain term="maxDrawdown" />
+                </div>
                 <div className={downClass(fall)}>{fall}</div>
                 <div className="sub">{fall.startsWith(MINUS) ? `${h.max_drawdown.peak} → ${h.max_drawdown.trough}` : "never below a previous high"}</div>
               </div>
@@ -198,14 +201,17 @@ function History({ data, range, setRange, loading }: { data: RiskReport; range: 
                 <div className="sub">{h.worst_month ? h.worst_month.month : "needs a full month"}</div>
               </div>
               <div>
-                <div className="k">Beta</div>
+                <div className="k">
+                  Beta <Explain term="beta" />
+                </div>
                 <div className="mid">{h.beta ? num2(h.beta.value) : DASH}</div>
                 <div className="sub">{h.beta ? betaSub(h.beta, h.from, h.to) : (h.beta_note ?? "not available")}</div>
               </div>
             </div>
-            <h3 className="sub-h" style={{ marginTop: 16 }}>
-              Below its last high
-            </h3>
+            <div className="card-title" style={{ marginTop: 16 }}>
+              <h3 className="sub-h">Below its last high</h3>
+              <Explain term="drawdownChart" />
+            </div>
             <div className={loading ? "chart-refresh busy" : "chart-refresh"}>
               {loading && <span className="spinner chart-spinner" aria-hidden="true" />}
               <AreaChart
@@ -299,7 +305,7 @@ function PerHolding({ rows, covered }: { rows: RiskHolding[]; covered: number })
   ];
   return (
     <Card as="section" aria-labelledby="perh-h">
-      <CardHeader id="perh-h" title="Per holding" />
+      <CardHeader id="perh-h" title="Per holding" term="shareOfRisk" />
       <DataTable sf={sf} columns={columns} rowKey={(r) => r.id} label="holdings by risk" variant="stack" rowHref={(r) => `/holding/${encodeURIComponent(r.id)}`} noFilter />
       {covered < 0.999 && (
         <p className="note">Share of value and of risk are both of the holdings measured ({plainPct(covered)} of today's value), so they compare.</p>

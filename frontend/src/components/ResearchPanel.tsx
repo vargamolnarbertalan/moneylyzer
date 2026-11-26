@@ -8,6 +8,8 @@ import { useSortFilter } from "../useSortFilter";
 import { Alert } from "./Alert";
 import { Card, CardHeader } from "./Card";
 import { DataTable, FilterBar, type Column, type PhoneSortOption } from "./DataTable";
+import { Labelled } from "./Explain";
+import type { TermId } from "../glossary";
 import { BlockSkeleton } from "./Skeleton";
 
 function Change({ item, value }: { item: MarketItem; value: number | null }) {
@@ -16,17 +18,23 @@ function Change({ item, value }: { item: MarketItem; value: number | null }) {
   return <span className={`pill ${value >= 0 ? "up" : "down"}`}>{pct(value)}</span>;
 }
 
+/** Benchmarks an everyday reader is least likely to know (by symbol, as stored in analyzer/research.py). */
+const BENCHMARK_TERMS: Record<string, TermId | undefined> = { "IWDA.AS": "msciWorld", "^VIX": "vix", "^TNX": "yield10y" };
+
 const MARKET_COLUMNS: readonly Column<MarketItem>[] = [
   {
     key: "name",
     header: "Name",
     sortKey: "name",
-    cell: (m) => (
-      <span>
-        {m.name}
-        <small className="cell-sub muted">{m.symbol}</small>
-      </span>
-    ),
+    cell: (m) => {
+      const term = BENCHMARK_TERMS[m.symbol];
+      return (
+        <span>
+          {term ? <Labelled text={m.name} term={term} /> : m.name}
+          <small className="cell-sub muted">{m.symbol}</small>
+        </span>
+      );
+    },
   },
   { key: "last", header: "Last", sortKey: "last", align: "right", cell: (m) => (isNum(m.last) ? price(m.last) : "—") },
   { key: "w1", header: "1W", sortKey: "w1", align: "right", cell: (m) => <Change item={m} value={m.change_1w} /> },
@@ -63,7 +71,7 @@ function MarketCard({ market }: { market: MarketItem[] }) {
   });
   return (
     <Card as="section" aria-labelledby="market-h">
-      <CardHeader id="market-h" title="Benchmarks" />
+      <CardHeader id="market-h" title="Benchmarks" term="benchmarks" />
       {market.length === 0 ? (
         <div className="empty">
           <b>No market data yet</b>

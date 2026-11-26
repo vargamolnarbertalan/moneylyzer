@@ -7,6 +7,7 @@ import { Alert } from "../components/Alert";
 import { AreaChart } from "../components/AreaChart";
 import { Tween } from "../components/Tween";
 import { Card, CardHeader } from "../components/Card";
+import { Explain } from "../components/Explain";
 import { DataTable, type Column, type PhoneSortOption } from "../components/DataTable";
 import { Donut } from "../components/Donut";
 import { Pill } from "../components/Pill";
@@ -121,7 +122,9 @@ function Hero({ snap }: { snap: Snapshot }) {
         </div>
       </Card>
       <Card className="pnl">
-        <div className="k">Unrealized P/L</div>
+        <div className="k">
+          Unrealized P/L <Explain term="unrealizedPL" />
+        </div>
         <div className="mid">
           <Tween tone={signClass} value={t.pnl_base} format={(v) => signedMoney(v, base)} unit={base} />
         </div>
@@ -130,8 +133,8 @@ function Hero({ snap }: { snap: Snapshot }) {
           {t.with_pnl < t.holdings && <> · {t.with_pnl} of {t.holdings} holdings</>}
         </div>
         {(t.mwr || t.mwr_left_out > 0) && (
-          <div className="sub" title="Money-weighted return (XIRR): your buys, sales and today's value, in the order and size you made them">
-            <span className="keep">Return</span> {t.mwr ? <Pill fraction={t.mwr.rate} /> : DASH} {t.mwr && <span className="keep">{mwrBasis(t.mwr)}</span>}
+          <div className="sub">
+            <span className="keep">Return</span> <Explain term="xirr" /> {t.mwr ? <Pill fraction={t.mwr.rate} /> : DASH} {t.mwr && <span className="keep">{mwrBasis(t.mwr)}</span>}
             {t.mwr_left_out > 0 && (
               <>
                 {" "}
@@ -143,7 +146,9 @@ function Hero({ snap }: { snap: Snapshot }) {
       </Card>
       {hasSales && (
         <Card className="realized">
-          <div className="k">Realized P/L</div>
+          <div className="k">
+            Realized P/L <Explain term="realizedPL" />
+          </div>
           <div className="mid">
             <Tween tone={signClass} value={t.realized_base} format={(v) => signedMoney(v, base)} unit={base} />
           </div>
@@ -247,6 +252,7 @@ function ValueChart({ snap }: { snap: Snapshot }) {
       <CardHeader
         id="value-chart-h"
         title="Value over time"
+        term="valueChart"
         aside={
           <div className="chart-controls">
             {offered.length > 1 && (
@@ -357,7 +363,7 @@ function Allocation({ rows, total, base }: { rows: Row[]; total: number | null; 
   const restWeight = rest.reduce((a, r) => a + (r.weight as number), 0);
   return (
     <Card as="section" className="alloc" aria-labelledby="alloc-h">
-      <CardHeader id="alloc-h" title="Allocation" aside={<Segmented label="Allocation view" options={ALLOC_VIEWS} value={view} onChange={setView} />} />
+      <CardHeader id="alloc-h" title="Allocation" term="allocation" aside={<Segmented label="Allocation view" options={ALLOC_VIEWS} value={view} onChange={setView} />} />
       {valued.length === 0 ? (
         <p className="sub">{rows.length > 0 && rows.every((r) => r.closed) ? "No open holdings: everything has been sold." : "Nothing has a price yet."}</p>
       ) : view === "grid" ? (
@@ -473,6 +479,7 @@ function makeColumns(base: string): readonly Column<Row>[] {
     {
       key: "pl",
       header: "P/L",
+      term: "unrealizedPL",
       sortKey: "pnl_pct",
       align: "right",
       className: "c-pl",
@@ -486,6 +493,7 @@ function makeColumns(base: string): readonly Column<Row>[] {
     {
       key: "mwr",
       header: "Return",
+      term: "xirr",
       sortKey: "mwr",
       align: "right",
       className: "c-ret",
