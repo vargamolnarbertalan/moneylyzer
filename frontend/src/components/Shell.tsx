@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useHeaderOverride } from "../pageTitle";
-import { ChartLine, FileUp, LayoutDashboard, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings, ShieldCheck, Sparkles, Wallet, type LucideIcon } from "lucide-react";
+import { ChartLine, FileUp, Gauge, LayoutDashboard, PanelLeftClose, PanelLeftOpen, RefreshCw, Settings, ShieldCheck, Sparkles, Wallet, type LucideIcon } from "lucide-react";
 import { errorMessage } from "../api";
 import { clockTime, isNum, price } from "../format";
 import { useMediaQuery } from "../hooks";
@@ -29,10 +29,11 @@ const NAV: readonly NavItem[] = [
   { to: "/import", label: "Import", icon: FileUp, group: "Portfolio" },
   { to: "/analyst", label: "AI analyst", icon: Sparkles, group: "Insights" },
   { to: "/markets", label: "Markets", icon: ChartLine, group: "Insights" },
+  { to: "/risk", label: "Risk", icon: Gauge, group: "Insights" },
   { to: "/privacy", label: "Data & privacy", icon: ShieldCheck, group: "Account" },
   { to: "/settings", label: "Settings", icon: Settings, group: "Account" },
 ];
-/** The phone tab bar: five fit, in this order; Import and Data & privacy are reached from Settings. */
+/** The phone tab bar: five fit, in this order; Import, Data & privacy and Risk are reached from Settings. */
 const TABS = ["/", "/analyst", "/holdings", "/markets", "/settings"];
 
 /** Below this width the sidebar is always the icon rail (and below 760px it becomes the bottom tab bar). */

@@ -19,6 +19,7 @@ CHOICES: dict[str, frozenset[str]] = {
     "alloc_view": frozenset({"bars", "grid", "pie"}),
     "overview_range": frozenset({"1W", "1M", "3M", "6M", "1Y", "3Y", "ALL"}),
     "holding_range": frozenset({"1W", "1M", "3M", "6M", "1Y", "ALL"}),
+    "risk_range": frozenset({"1Y", "3Y"}),
 }
 TABLE_KEY = re.compile(r"table:[a-z0-9][a-z0-9-]{0,39}")  # one per DataTable / list (useSortFilter id); fullmatch
 MAX_TABLES = 40

@@ -48,6 +48,57 @@ MIN_QUOTE_GAP = 15  # the shortest interval: a requested refresh after an edit k
 FUND_SECONDS = 3600
 FAIL_BACKOFF_SECONDS = 600
 MANUAL_MIN_GAP_SECONDS = 30
+BENCH_BACKFILL_DAYS = 1132  # a stored benchmark starting later than ~3.1 years ago can't cover the Risk page's 3Y range
+READJUST_TOLERANCE = 0.001  # a stored past close differing more than 0.1% from Yahoo's: history re-adjusted
+MONTH_COVERS = pd.Timedelta(days=20)  # a one-month download only closes a gap shorter than this; older: in full
+YAHOO = "Yahoo Finance via yfinance"
+IMPORTED = "CSV import"  # prices the owner imported are theirs: Yahoo fills the other days, never replaces them
+
+
+def _yahoo_prices(instrument_id: str, since: str | None = None) -> pd.DataFrame:
+    stored = db.get_prices(instrument_id, since=since)
+    return stored[stored["source"] != IMPORTED] if not stored.empty else stored
+
+
+def full_period(instrument_id: str) -> tuple[str, str | None]:
+    """The shortest Yahoo period that reaches back to the oldest stored Yahoo close (a repair that stops at
+    5 years would leave older ones on the old scale), and that date: a repair keeps only rows from it on, so
+    the stored history doesn't grow backwards with every start (5y, then 10y, then the whole listing)."""
+    stored = _yahoo_prices(instrument_id)
+    if stored.empty:
+        return "5y", None
+    oldest = pd.Timestamp(stored["date"].min()).date().isoformat()
+    years = (pd.Timestamp.today() - pd.Timestamp(oldest)).days / 365.25
+    return ("5y" if years <= 5.05 else "10y" if years <= 10.05 else "max"), oldest
+
+
+def newest_yahoo(instrument_id: str) -> str | None:
+    stored = _yahoo_prices(instrument_id)
+    return None if stored.empty else pd.Timestamp(stored["date"].max()).date().isoformat()
+
+
+def without_imported(instrument_id: str, frame: pd.DataFrame) -> pd.DataFrame:
+    stored = db.get_prices(instrument_id)
+    if stored.empty or frame.empty:
+        return frame
+    mine = {pd.Timestamp(d).date().isoformat() for d in stored.loc[stored["source"] == IMPORTED, "date"]}
+    return frame[[pd.Timestamp(d).date().isoformat() not in mine for d in frame["date"]]] if mine else frame
+
+
+def readjusted(instrument_id: str, frame: pd.DataFrame) -> bool:
+    """Yahoo's adjusted closes change for every past day after a split or dividend. True when the fresh closes
+    differ from the stored Yahoo ones on the same past days: the older stored closes are then on another scale,
+    and only a download over the whole stored range keeps the history free of a fake jump (a 10:1 split read
+    as a 90% fall)."""
+    if frame.empty:
+        return False
+    new = pd.Series(frame["close"].to_numpy(dtype=float), index=[pd.Timestamp(d).date().isoformat() for d in frame["date"]])
+    stored = _yahoo_prices(instrument_id, since=new.index.min())
+    if stored.empty:
+        return False
+    old = pd.Series(stored["close"].to_numpy(dtype=float), index=[pd.Timestamp(d).date().isoformat() for d in stored["date"]])
+    both = pd.concat([old, new], axis=1, keys=["old", "new"]).dropna().sort_index().iloc[:-1]  # newest: maybe mid-session
+    return bool(((both["new"] / both["old"] - 1).abs() > READJUST_TOLERANCE).any()) if not both.empty else False
 
 
 def clean(obj):
@@ -76,6 +127,8 @@ class LiveHub:
         self._daily_done: dict[str, str] = {}     # key -> ISO day of last success
         self._next_try: dict[str, float] = {}     # key -> earliest retry time after a failure
         self._fund_done: dict[str, float] = {}
+        self._bench_backfilled: set[str] = set()  # benchmarks given a 5y download this run (once is enough)
+        self._daily_full: set[str] = set()  # holdings whose daily history was downloaded in full (5y) this run
         self._errors: dict[str, str] = {}         # symbol / "FX EUR" / "FX history EUR" -> message, cleared on success
         self._quotes: dict[str, dict] = {}        # last live quotes, reused by recompute()
         self._wake = asyncio.Event()              # a viewer arrived or the interval changed: re-plan the loop
@@ -151,6 +204,7 @@ class LiveHub:
             self._daily_done.pop(key, None)
             self._fund_done.pop(key, None)
             self._next_try.pop(key, None)
+        self._daily_full.discard(instrument_id)  # another ticker: its whole history, not one month on top of the old one
         now = time.monotonic()
         self._last_quotes = min(self._last_quotes, max(self._last_quotes + MIN_QUOTE_GAP, now) - self.seconds())
         self._last_background = float("-inf")
@@ -278,18 +332,40 @@ class LiveHub:
                 db.save_prices(ident, frame, source)
                 self._fund_done[key] = time.time()
             elif kind == "daily":
-                period = "1mo" if db.latest_price_date(ident) else "5y"
-                frame, error = download_daily_history(symbol, period=period)
+                # in full once per run (repairs a history stored before a split or dividend re-adjusted it) and
+                # after a pause longer than a month can bridge, else one month at a time, again in full whenever
+                # Yahoo re-adjusted the past closes
+                last = newest_yahoo(ident)  # imported closes don't bridge a gap in Yahoo's
+                full = (ident not in self._daily_full or not last
+                        or pd.Timestamp(last) < pd.Timestamp.today().normalize() - MONTH_COVERS)
+                period, oldest = full_period(ident)
+                frame, error = download_daily_history(symbol, period=period if full else "1mo")
+                if not error and not full and readjusted(ident, frame):
+                    full = True
+                    frame, error = download_daily_history(symbol, period=period)
                 if error:
                     return self._fail(key, symbol, f"Daily history: {error}")
-                db.save_prices(ident, frame, "Yahoo Finance via yfinance")
+                if full and oldest:
+                    frame = frame[[pd.Timestamp(d).date().isoformat() >= oldest for d in frame["date"]]]
+                # a full download replaces every Yahoo close in its range (another listing's, an older
+                # adjustment's); imported ones stay
+                db.save_prices(ident, without_imported(ident, frame), YAHOO, replace_except=IMPORTED if full else None)
                 self._daily_done[key] = today
+                if full:
+                    self._daily_full.add(ident)
             elif kind == "bench":
-                has = bool(research._series(ident).size)
-                frame, error = download_daily_history(ident, period="1mo" if has else "2y")
+                # 5 years on the first fetch, and once per run when an older install stored only 2 years; a
+                # benchmark Yahoo has no older data for is then not downloaded in full every day
+                stored = research._series(ident)
+                cutoff = pd.Timestamp.today().normalize() - pd.Timedelta(days=BENCH_BACKFILL_DAYS)
+                full = (stored.empty or (ident not in self._bench_backfilled and stored.index.min() > cutoff)
+                        or stored.index.max() < pd.Timestamp.today().normalize() - MONTH_COVERS)  # a long pause
+                frame, error = download_daily_history(ident, period="5y" if full else "1mo")
                 if error:
                     return self._fail(key, f"benchmark {ident}", f"Benchmark {ident}: {error}")
                 research.save_benchmark(ident, frame)
+                if full:
+                    self._bench_backfilled.add(ident)
                 self._daily_done[key] = today
                 return self._ok(key, f"benchmark {ident}")
             elif kind == "news":

@@ -88,6 +88,50 @@ export interface HistoryPoint {
   value: number;
 }
 
+export interface RiskHolding {
+  id: string;
+  name: string;
+  /** Share of the whole portfolio's value. */
+  weight: number;
+  /** Share among the holdings measured: the same 100% the risk shares add up to. */
+  mix_weight: number;
+  volatility: number;
+  max_drawdown: number;
+  /** Share of the portfolio's variance (the shares add up to 1); null when the portfolio does not move. */
+  risk_share: Nullable<number>;
+}
+
+export interface RiskHistory {
+  error?: string;
+  from: string;
+  to: string;
+  observations: number;
+  /** Share of today's value the figures cover (holdings with enough daily prices). */
+  covered_weight: number;
+  /** Holdings left out, with why (no prices across the whole range, no exchange rate, ...); also sent with some errors. */
+  excluded?: { name: string; reason: string }[];
+  volatility: number;
+  max_drawdown: { value: number; peak: string; trough: string };
+  worst_day: { value: number; date: string };
+  worst_month: Nullable<{ value: number; month: string }>;
+  /** On weekly returns; `from` is later than the range's start when the benchmark's stored prices start later. */
+  beta: Nullable<{ value: number; correlation: number; benchmark: string; currency: string; from: string; to: string; weeks: number }>;
+  /** Why there is no beta, when `beta` is null. */
+  beta_note: Nullable<string>;
+  holdings: RiskHolding[];
+  drawdown: { date: string; value: number }[];
+}
+
+export interface RiskReport {
+  range: "1Y" | "3Y";
+  base_currency: string;
+  concentration: Nullable<{ largest: { id: string; name: string; weight: number }; top3: number; effective: number; holdings: number }>;
+  /** Holdings still held but without a value right now (no price or exchange rate), so in no weight. */
+  unvalued: string[];
+  exposure: { currency: { key: string; weight: number }[]; type: { key: string; weight: number }[] };
+  history: RiskHistory;
+}
+
 export interface IntradayHistory {
   range: string;
   interval: string;
@@ -606,6 +650,7 @@ export const endpoints = {
   ask: (body: { question: string; history: ChatTurn[]; provider_id?: string; instrument_id?: string; expected_level?: DataLevel; effort?: Effort; conversation_id?: string; turn_id?: string; attachments?: { name: string; data: string }[] }) =>
     api.post<AdvisorAnswer>("/api/advisor/ask", body),
   research: () => api.get<Research>("/api/research"),
+  risk: (range: "1Y" | "3Y") => api.get<RiskReport>(`/api/risk?range=${range}`),
   conversations: () => api.get<ConversationSummary[]>("/api/advisor/conversations"),
   conversation: (id: string) => api.get<SavedConversation>(`/api/advisor/conversations/${encodeURIComponent(id)}`),
   deleteConversation: (id: string) => api.del<{ ok: boolean }>(`/api/advisor/conversations/${encodeURIComponent(id)}`),

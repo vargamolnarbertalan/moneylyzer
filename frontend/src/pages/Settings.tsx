@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { CodeXml, FileUp, Scale, ShieldCheck } from "lucide-react";
+import { CodeXml, FileUp, Gauge, Scale, ShieldCheck } from "lucide-react";
 import { endpoints, errorMessage } from "../api";
 import { useAuth } from "../auth";
 import { Alert } from "../components/Alert";
@@ -200,6 +200,10 @@ export function SettingsPage() {
             <Link className="btn ghost small" to="/import">
               <FileUp aria-hidden="true" />
               Import CSV
+            </Link>
+            <Link className="btn ghost small" to="/risk">
+              <Gauge aria-hidden="true" />
+              Risk
             </Link>
           </div>
         </Card>

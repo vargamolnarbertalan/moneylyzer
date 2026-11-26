@@ -6,6 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pandas as pd
+
 from analyzer import db
 from server import live
 
@@ -128,6 +130,120 @@ class LoopTests(unittest.IsolatedAsyncioTestCase):
         self.hub.subscribe()
         await asyncio.sleep(0.1)
         self.assertEqual(len(self.runs), 1)  # the data is fresh enough: no second request to Yahoo
+
+
+class DailyHistoryTests(unittest.TestCase):
+    """Yahoo's adjusted closes change for all past days after a split or dividend; a month-only update would
+    leave the older stored closes on the old scale, a fake 90% fall on the Risk page and the charts."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name)
+        for p in (mock.patch.object(db, "DATA_DIR", d), mock.patch.object(db, "DB_PATH", d / "t.sqlite3")):
+            p.start()
+            self.addCleanup(p.stop)
+        db.initialize()
+        db.upsert_instrument({"instrument_id": "N", "name": "N", "asset_type": "stock", "quantity": 1,
+                              "currency": "USD", "market_symbol": "NVDA", "price_divisor": 1})
+        self.days = pd.bdate_range(end=pd.Timestamp.today().normalize(), periods=60)
+        db.save_prices("N", pd.DataFrame({"date": self.days, "close": 1000.0, "currency": "USD"}), "t")
+
+    def run_daily(self, hub, scale):
+        """One daily job where Yahoo serves today's history at `scale` times the stored closes; the periods asked."""
+        periods = []
+
+        def download(symbol, period):
+            periods.append(period)
+            days = self.days[-22:] if period == "1mo" else self.days
+            return pd.DataFrame({"date": days, "close": 1000.0 * scale, "currency": "USD"}), None
+
+        with mock.patch.object(live, "download_daily_history", side_effect=download):
+            hub._run_job(("daily", "daily:N", "N", "NVDA", None))
+        return periods
+
+    def test_full_once_per_run_then_a_month_and_full_again_after_a_split(self):
+        hub = live.LiveHub()
+        self.assertEqual(self.run_daily(hub, 1.0), ["5y"])  # first pass this run: repairs older seams
+        self.assertEqual(self.run_daily(hub, 1.0), ["1mo"])  # unchanged past closes: a month is enough
+        self.assertEqual(self.run_daily(hub, 0.1), ["1mo", "5y"])  # a 10:1 split re-adjusted them all
+        self.assertEqual(set(db.get_prices("N")["close"]), {100.0})  # no old-scale close left behind
+        hub.request_refresh("N")  # another ticker typed in: its whole history again
+        self.assertEqual(self.run_daily(hub, 0.1), ["5y"])
+
+    def test_a_repair_reaches_back_to_the_oldest_stored_close(self):
+        old = pd.bdate_range(end=pd.Timestamp.today().normalize() - pd.DateOffset(years=6), periods=5)
+        db.save_prices("N", pd.DataFrame({"date": old, "close": 1000.0, "currency": "USD"}), live.YAHOO)
+        self.assertEqual(live.full_period("N")[0], "10y")  # 5y would leave the 6-year-old closes on the old scale
+
+    def test_repairs_dont_grow_the_history_backwards(self):
+        hub = live.LiveHub()
+        oldest = self.days[0].date().isoformat()
+
+        def download(symbol, period):  # Yahoo serves as much as asked for
+            days = pd.bdate_range(end=self.days[-1], periods={"5y": 1300, "10y": 2600}.get(period, 10000))
+            return pd.DataFrame({"date": days, "close": 1000.0, "currency": "USD"}), None
+
+        with mock.patch.object(live, "download_daily_history", side_effect=download):
+            for _ in range(3):  # three starts: each does a full download
+                hub._daily_full.clear()
+                hub._run_job(("daily", "daily:N", "N", "NVDA", None))
+        self.assertEqual(db.get_prices("N")["date"].min().date().isoformat(), oldest)
+
+    def test_a_full_download_replaces_other_listings_closes_in_its_range(self):
+        holiday = self.days[-30] + pd.Timedelta(days=1)  # a Saturday-ish date only the old listing had
+        db.save_prices("N", pd.DataFrame({"date": [holiday], "close": [70.0], "currency": "GBp"}), live.YAHOO)
+        self.run_daily(live.LiveHub(), 1.0)
+        self.assertNotIn(holiday.date().isoformat(), set(db.get_prices("N")["date"]))
+
+    def test_a_pause_longer_than_a_month_gets_the_whole_history(self):
+        hub = live.LiveHub()
+        hub._daily_full.add("N")
+        with mock.patch.object(live, "newest_yahoo", return_value="2026-01-02"):
+            self.assertEqual(self.run_daily(hub, 1.0), ["5y"])  # one month would leave a hole behind
+
+    def test_imported_prices_are_kept(self):
+        mine = self.days[-10]
+        db.save_prices("N", pd.DataFrame({"date": [mine], "close": [777.0], "currency": "USD"}), live.IMPORTED)
+        hub = live.LiveHub()
+        hub._daily_full.add("N")
+        self.assertEqual(self.run_daily(hub, 1.0), ["1mo"])  # their own close is no sign of a re-adjustment
+        prices = db.get_prices("N").set_index("date")
+        self.assertEqual(prices.loc[mine.date().isoformat(), "close"], 777.0)
+        self.assertEqual(prices.loc[mine.date().isoformat(), "source"], live.IMPORTED)
+
+    def test_readjusted_ignores_the_newest_day_and_tiny_rounding(self):
+        frame = pd.DataFrame({"date": self.days[-5:], "close": [1000.0, 1000.0005, 1000.0, 1000.0, 990.0]})
+        self.assertFalse(live.readjusted("N", frame))  # today's bar still moving when it was stored
+        self.assertTrue(live.readjusted("N", frame.assign(close=[995.0] * 5)))  # a 0.5% dividend adjustment
+
+
+class BenchmarkBackfillTests(unittest.TestCase):
+    """The Risk page's 3Y range needs about 3 years of MSCI World; older installs stored only 2."""
+
+    def run_bench(self, hub, years_stored):
+        today = pd.Timestamp.today().normalize()
+        stored = (pd.Series([1.0, 1.0], index=[today - pd.DateOffset(years=years_stored), today])
+                  if years_stored else pd.Series(dtype=float))
+        periods = []
+
+        def download(symbol, period):
+            periods.append(period)
+            return pd.DataFrame({"date": [], "close": []}), None
+
+        with mock.patch.object(live.research, "_series", return_value=stored), \
+                mock.patch.object(live.research, "save_benchmark"), \
+                mock.patch.object(live, "download_daily_history", side_effect=download):
+            hub._run_job(("bench", "bench:IWDA.AS", "IWDA.AS", "IWDA.AS", None))
+        return periods[0]
+
+    def test_first_fetch_and_a_short_history_get_5y_once_a_long_one_only_a_month(self):
+        hub = live.LiveHub()
+        self.assertEqual(self.run_bench(hub, None), "5y")
+        hub = live.LiveHub()
+        self.assertEqual(self.run_bench(hub, 2), "5y")  # 2 years stored: backfill
+        self.assertEqual(self.run_bench(hub, 2), "1mo")  # Yahoo had no more: not again this run
+        self.assertEqual(self.run_bench(live.LiveHub(), 5), "1mo")
 
 
 if __name__ == "__main__":
