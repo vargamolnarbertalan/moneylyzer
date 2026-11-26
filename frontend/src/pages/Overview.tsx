@@ -15,7 +15,7 @@ import { OverviewSkeleton, Skeleton } from "../components/Skeleton";
 import { Sparkline } from "../components/Sparkline";
 import { Treemap } from "../components/Treemap";
 import { chipColor, chipText } from "../chip";
-import { DASH, asOfLabel, axisFormatter, isNum, localISODate, money, plainPct, priceWithCcy, qty, signClass, signedMoney, typeLabel } from "../format";
+import { DASH, asOfLabel, axisFormatter, isNum, localISODate, money, mwrBasis, plainPct, priceWithCcy, qty, signClass, signedMoney, typeLabel } from "../format";
 import { useResource, useTitle } from "../hooks";
 import { usePref } from "../prefs";
 import { useLive } from "../live";
@@ -129,6 +129,17 @@ function Hero({ snap }: { snap: Snapshot }) {
           <Pill fraction={t.pnl_pct} /> <span className="keep">vs. what you paid</span>
           {t.with_pnl < t.holdings && <> · {t.with_pnl} of {t.holdings} holdings</>}
         </div>
+        {(t.mwr || t.mwr_left_out > 0) && (
+          <div className="sub" title="Money-weighted return (XIRR): your buys, sales and today's value, in the order and size you made them">
+            <span className="keep">Return</span> {t.mwr ? <Pill fraction={t.mwr.rate} /> : DASH} {t.mwr && <span className="keep">{mwrBasis(t.mwr)}</span>}
+            {t.mwr_left_out > 0 && (
+              <>
+                {" "}
+                · without {t.mwr_left_out} {t.mwr_left_out === 1 ? "holding" : "holdings"} whose value or a transaction amount is unknown
+              </>
+            )}
+          </div>
+        )}
       </Card>
       {hasSales && (
         <Card className="realized">
@@ -472,6 +483,26 @@ function makeColumns(base: string): readonly Column<Row>[] {
         </span>
       ),
     },
+    {
+      key: "mwr",
+      header: "Return",
+      sortKey: "mwr",
+      align: "right",
+      className: "c-ret",
+      cell: (r) =>
+        r.mwr ? (
+          <span className="ret" title={mwrBasis(r.mwr)}>
+            <Pill fraction={r.mwr.rate} />
+            {/* the column is narrow: the short form shows, the full one is read out and in the tooltip */}
+            <small aria-hidden="true">{r.mwr.annualised ? "a year" : `since ${r.mwr.since}`}</small>
+            <span className="sr-only">{mwrBasis(r.mwr)}</span>
+          </span>
+        ) : (
+          <span className="ret" title="Needs transactions with known amounts">
+            {DASH}
+          </span>
+        ),
+    },
   ];
 }
 
@@ -489,6 +520,7 @@ function HoldingsList({ rows: all, base, flashes }: { rows: Row[]; base: string;
       pnl_pct: { type: "number", value: (r) => r.pnl_pct },
       today_pct: { type: "number", value: (r) => r.today_pct },
       weight: { type: "number", value: (r) => r.weight },
+      mwr: { type: "number", value: (r) => r.mwr?.rate ?? null },
     },
     search: (r) => [r.name, r.id, r.symbol, typeLabel(r.type), r.currency].filter(Boolean).join(" "),
     defaultSort: { key: "value", dir: "desc" },

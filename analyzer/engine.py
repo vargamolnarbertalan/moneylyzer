@@ -338,6 +338,27 @@ def realized_by_sale(item: dict, lots: list[dict], rate_on: Callable[[str, str],
     return {s["lot"]["lot_id"]: s["realized_base"] for s in settled}
 
 
+def cash_flows(item: dict, lots: list[dict], value_base: float | None, closed: bool, today: str,
+               rate_on: Callable[[str, str], float | None], base: str = "HUF") -> list[tuple[str, float]] | None:
+    """Dated cash flows of one holding in the base currency, for its money-weighted return: each buy as money
+    in (negative, what was paid at that day's rate), each sale as money out (its proceeds), and today's value
+    as if sold (none once everything is sold). None when it cannot be measured: no transactions (the holding
+    row alone has no dates), or any amount unknown (a missing price or rate never silently counts as 0)."""
+    if not lots or (value_base is None and not closed):
+        return None
+    currency = str(item["currency"]).strip().upper()
+    divisor = float(item.get("price_divisor") or 1.0)
+    flows = []
+    for lot in lots:
+        amount, problem, _ccy = _base_amount(lot, float(lot["quantity"]), currency, divisor, base.upper(), rate_on)
+        if problem:
+            return None
+        flows.append((str(lot["buy_date"]), amount if lot.get("side") == "sell" else -amount))
+    if not closed:
+        flows.append((today, float(value_base)))
+    return flows
+
+
 def _sale_notes(settled: list[dict], base: str) -> list[str]:
     notes, no_price, rates, buy_no_price, buy_rates = [], 0, set(), False, set()
     for s in settled:

@@ -12,7 +12,7 @@ import { Pill } from "../components/Pill";
 import { Purchases } from "../components/Purchases";
 import { Segmented } from "../components/Segmented";
 import { BlockSkeleton, Skeleton } from "../components/Skeleton";
-import { asOfLabel, ccyLabel, daysAgoISO, isNum, money, price, priceWithCcy, qty, signClass, signedMoney, signedPrice, sourceLabel, typeLabel } from "../format";
+import { asOfLabel, ccyLabel, daysAgoISO, isNum, money, mwrBasis, price, priceWithCcy, qty, signClass, signedMoney, signedPrice, sourceLabel, typeLabel } from "../format";
 import { useResource, useTitle } from "../hooks";
 import { useHeaderTitle } from "../pageTitle";
 import { usePref } from "../prefs";
@@ -177,6 +177,11 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
             </>
           )}
         </div>
+        {row?.mwr && (
+          <div className="sub" title="Money-weighted return (XIRR): your buys, sales and today's value, in the order and size you made them">
+            <span className="keep">Return</span> <Pill fraction={row.mwr.rate} /> <span className="keep">{mwrBasis(row.mwr)}</span>
+          </div>
+        )}
       </Card>
       {sells > 0 && (
         <Card>

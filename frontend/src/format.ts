@@ -176,6 +176,13 @@ export function asOfLabel(asOf: string | null | undefined): string {
 // one formatter for every label: toLocaleTimeString builds a new one per call (slow on a 9,000-bar chart)
 const hourMinute = new Intl.DateTimeFormat(LOCALE, { hour: "2-digit", minute: "2-digit" });
 
+/** What a money-weighted return measures, next to its percentage: "a year" (XIRR), or the period it covers
+ *  ("since 2026-11-12, not annualised"; "2026-01-01 to 2026-02-01, not annualised" once sold out). */
+export function mwrBasis(m: { annualised: boolean; since: string; until: string; ongoing: boolean }): string {
+  if (m.annualised) return "a year";
+  return `${m.ongoing ? `since ${m.since}` : `${m.since} to ${m.until}`}, not annualised`;
+}
+
 export function localISODate(d: Date = new Date()): string {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");

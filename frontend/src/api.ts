@@ -34,6 +34,20 @@ export interface Row {
   spark: number[];
   check: string;
   weight: Nullable<number>;
+  /** Money-weighted return in the base currency (null: no transactions, or an amount is unknown). */
+  mwr: Nullable<MoneyWeighted>;
+}
+
+/** XIRR from a year of history on; under a year the money-weighted return for the period (not annualised). */
+export interface MoneyWeighted {
+  rate: number;
+  annualised: boolean;
+  /** The first transaction's date (ISO). */
+  since: string;
+  /** The last flow: today while held, else the last sale (ISO). */
+  until: string;
+  /** Still held: the period runs until today. */
+  ongoing: boolean;
 }
 
 export interface Totals {
@@ -50,6 +64,11 @@ export interface Totals {
   valued: number;
   with_pnl: number;
   with_today: number;
+  /** Over every holding with transactions whose amounts are known, sold-out ones included. */
+  mwr: Nullable<MoneyWeighted>;
+  mwr_holdings: number;
+  /** Holdings with transactions left out because an amount (price or rate) is unknown. */
+  mwr_left_out: number;
 }
 
 export interface Snapshot {

@@ -1247,7 +1247,7 @@ a.link-btn {
 .dt-rows .dt thead tr,
 .dt-rows .dt tbody tr {
   display: grid;
-  grid-template-columns: 36px minmax(0, 1.6fr) 110px minmax(0, 1fr) minmax(0, 1fr) 90px;
+  grid-template-columns: 36px minmax(0, 1.6fr) 110px minmax(0, 1fr) minmax(0, 1fr) 90px 104px;
   gap: 12px;
   align-items: center;
 }
@@ -1365,6 +1365,17 @@ a.link-btn {
 }
 .dt-rows .pl small {
   display: none;
+}
+/* Return column: what the figure measures stays visible ("a year" vs "since 2026-11-10"), or a two-week
+   period return would read like an annual one */
+.dt-rows .ret {
+  display: block;
+  text-align: right;
+}
+.dt-rows .ret small {
+  display: block;
+  color: var(--muted);
+  font-size: 11.5px;
 }
 .dt-rows tr.flash-up {
   animation: fu 1.1s ease;
@@ -3149,7 +3160,7 @@ a.news-card:hover {
 @media (max-width: 1100px) {
   .dt-rows .dt thead tr,
   .dt-rows .dt tbody tr {
-    grid-template-columns: 36px minmax(0, 1.6fr) 90px minmax(0, 1fr) 84px;
+    grid-template-columns: 36px minmax(0, 1.6fr) 90px minmax(0, 1fr) 84px 104px;
   }
   .dt-rows .c-px {
     display: none;
@@ -3234,8 +3245,9 @@ a.news-card:hover {
   .dt-rows .dt tbody tr {
     grid-template-columns: 36px minmax(0, 1fr) 64px auto;
   }
-  .dt-rows .c-val {
-    display: none;
+  .dt-rows .c-val,
+  .dt-rows .c-ret {
+    display: none; /* phone rows keep value and P/L in one cell; Return is on the holding page */
   }
   .dt-rows .pl small {
     display: block;
