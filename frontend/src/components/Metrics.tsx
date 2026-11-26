@@ -4,6 +4,8 @@ import { DASH, fixed2, isNum, pct, plainPct, price, signClass } from "../format"
 import { useSortFilter } from "../useSortFilter";
 import { Card, CardHeader } from "./Card";
 import { DataTable, type Column } from "./DataTable";
+import { Labelled } from "./Explain";
+import type { TermId } from "../glossary";
 import { Check, X } from "lucide-react";
 
 function signalTone(signal: string): "up" | "down" | "" {
@@ -23,6 +25,8 @@ interface MetricRow {
   num: number | null;
   node: ReactNode;
   text: string;
+  /** An ⓘ after the label explaining the metric. */
+  term?: TermId;
 }
 
 function metricRows(m: Metrics, unit: string): MetricRow[] {
@@ -48,11 +52,11 @@ function metricRows(m: Metrics, unit: string): MetricRow[] {
     ret("r3m", "Return 3 months", m.return_3m),
     ret("r6m", "Return 6 months", m.return_6m),
     ret("r1y", "Return 1 year", m.return_1y),
-    ret("dd", "Drawdown from peak", m.drawdown),
-    { key: "vol", label: "Volatility (annualised)", num: m.annual_volatility, node: plainPct(m.annual_volatility), text: plainPct(m.annual_volatility) },
-    { key: "rsi", label: "RSI (14)", num: m.rsi_14, node: fixed2(m.rsi_14), text: fixed2(m.rsi_14) },
-    px("sma50", "SMA 50", m.sma_50),
-    px("sma200", "SMA 200", m.sma_200),
+    { ...ret("dd", "Drawdown from peak", m.drawdown), term: "drawdownNow" },
+    { key: "vol", label: "Volatility (annualised)", num: m.annual_volatility, node: plainPct(m.annual_volatility), text: plainPct(m.annual_volatility), term: "holdingVolatility" },
+    { key: "rsi", label: "RSI (14)", num: m.rsi_14, node: fixed2(m.rsi_14), text: fixed2(m.rsi_14), term: "rsi" },
+    { ...px("sma50", "SMA 50", m.sma_50), term: "movingAverage" },
+    { ...px("sma200", "SMA 200", m.sma_200), term: "movingAverage" },
     {
       key: "obs",
       label: "Observations",
@@ -69,7 +73,13 @@ function metricRows(m: Metrics, unit: string): MetricRow[] {
 }
 
 const METRIC_COLUMNS: readonly Column<MetricRow>[] = [
-  { key: "label", header: "Metric", sortKey: "label", className: "c-metric", cell: (r) => r.label },
+  {
+    key: "label",
+    header: "Metric",
+    sortKey: "label",
+    className: "c-metric",
+    cell: (r) => (r.term ? <Labelled text={r.label} term={r.term} /> : r.label),
+  },
   { key: "value", header: "Value", sortKey: "value", cell: (r) => r.node },
 ];
 
@@ -88,7 +98,7 @@ export function MetricsCard({ metrics, ccy }: { metrics: Metrics; ccy: string })
   });
   return (
     <Card as="section" aria-labelledby="metrics-h">
-      <CardHeader id="metrics-h" title="Trend signals" aside={<span className="tag">price-only · no LLM</span>} />
+      <CardHeader id="metrics-h" title="Trend signals" term="signal" aside={<span className="tag">price-only · no LLM</span>} />
       <DataTable sf={sf} columns={METRIC_COLUMNS} rowKey={(r) => r.key} label="trend signals" variant="plain" noFilter />
       {metrics.reasons.length > 0 && (
         <ul className="reasons" aria-label="Signal reasons">
@@ -159,7 +169,7 @@ export function ScenariosCard({ scenarios, ccy }: { scenarios: Scenario[]; ccy: 
   ];
   return (
     <Card as="section" aria-labelledby="scen-h">
-      <CardHeader id="scen-h" title="Scenario ranges" aside={<span className="tag">not predictions</span>} />
+      <CardHeader id="scen-h" title="Scenario ranges" term="scenarios" aside={<span className="tag">not predictions</span>} />
       <DataTable sf={sf} columns={columns} rowKey={(s) => s.observations_ahead} label="scenario ranges" variant="plain" noFilter />
       <p className="note">Historical bootstrap of this holding's own daily returns: 10% of simulated paths ended below Low, 10% above High. Not a forecast; past returns do not predict future ones.</p>
     </Card>

@@ -106,6 +106,7 @@ export function Purchases({ instrumentId, currency, base, lots, onChanged }: Pur
     {
       key: "realized",
       header: "Realized P/L",
+      term: "realizedPL",
       sortKey: "realized",
       align: "right",
       // Sells only; a sale whose figures are incomplete shows a dash, the holding's data check says why.

@@ -6,6 +6,7 @@ import { AreaChart } from "../components/AreaChart";
 import { Tween } from "../components/Tween";
 import { AiMark } from "../components/AiMark";
 import { Card, CardHeader } from "../components/Card";
+import { Explain } from "../components/Explain";
 import { ArrowLeft } from "lucide-react";
 import { MetricsCard, ScenariosCard } from "../components/Metrics";
 import { Pill } from "../components/Pill";
@@ -164,7 +165,9 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
         <div className="sub">{isNum(row?.quantity) ? `${qty(row?.quantity)} units` : "—"}</div>
       </Card>
       <Card>
-        <div className="k">Unrealized P/L</div>
+        <div className="k">
+          Unrealized P/L <Explain term="unrealizedPL" />
+        </div>
         <div className="mid">
           <Tween tone={signClass} value={row?.pnl_base} format={(v) => signedMoney(v, base)} unit={base} />
         </div>
@@ -178,14 +181,16 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
           )}
         </div>
         {row?.mwr && (
-          <div className="sub" title="Money-weighted return (XIRR): your buys, sales and today's value, in the order and size you made them">
-            <span className="keep">Return</span> <Pill fraction={row.mwr.rate} /> <span className="keep">{mwrBasis(row.mwr)}</span>
+          <div className="sub">
+            <span className="keep">Return</span> <Explain term="xirr" /> <Pill fraction={row.mwr.rate} /> <span className="keep">{mwrBasis(row.mwr)}</span>
           </div>
         )}
       </Card>
       {sells > 0 && (
         <Card>
-          <div className="k">Realized P/L</div>
+          <div className="k">
+            Realized P/L <Explain term="realizedPL" />
+          </div>
           <div className="mid">
             <Tween tone={signClass} value={row?.realized_base} format={(v) => signedMoney(v, base)} unit={base} />
           </div>
@@ -204,7 +209,9 @@ function Stats({ row, currency, base }: { row: Row | null; currency: string; bas
         <div className="sub">as of {asOfLabel(row?.as_of)}</div>
       </Card>
       <Card>
-        <div className="k">Average cost</div>
+        <div className="k">
+          Average cost <Explain term="avgCost" />
+        </div>
         <div className="mid">{priceWithCcy(row?.avg_cost, currency, true)}</div>
         <div className="sub">{buys > 0 ? `from ${buys} ${buys === 1 ? "purchase" : "purchases"}` : "from your holding record"}</div>
       </Card>
@@ -280,6 +287,7 @@ function PriceChart({ detail, row, priceCcy }: { detail: InstrumentDetail; row: 
       <CardHeader
         id="price-h"
         title="Price per unit"
+        term="priceChart"
         aside={
           <div className="chart-controls">
             {offered.length > 1 && (

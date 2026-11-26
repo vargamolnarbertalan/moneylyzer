@@ -1317,6 +1317,11 @@ a.link-btn {
   inset: 0;
   border-radius: inherit;
 }
+/* The stretched link covers its own row, not the nearest positioned ancestor (the card, where it would
+   take over the title and every other row's clicks). */
+.dt tbody tr:has(.row-link) {
+  position: relative;
+}
 .row-link:focus-visible {
   outline: none;
 }
@@ -3886,6 +3891,103 @@ a.news-card:hover {
 }
 .sel-trigger[data-state="open"] .sel-chevron svg {
   transform: rotate(180deg);
+}
+/* ---------- ⓘ explainer (components/Explain.tsx) ---------- */
+/* 24 px tap target (WCAG 2.2 target size) without making the label's line taller: the negative margins
+   give back what the button adds around its 14 px icon. */
+.explain-btn {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  margin: -5px -3px -5px 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  vertical-align: middle;
+  cursor: pointer;
+}
+.explain-btn svg {
+  width: 14px;
+  height: 14px;
+}
+.explain-btn:hover,
+.explain-btn[data-state="open"] {
+  background: var(--chip);
+  color: var(--text);
+}
+.card-title {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+.explain-pop {
+  z-index: 60;
+  width: min(340px, calc(100vw - 24px));
+  border-radius: 14px;
+  padding: 10px 14px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  transform-origin: var(--radix-popover-content-transform-origin);
+  animation: glass-in 0.14s ease-out;
+}
+.explain-pop p {
+  margin: 0 0 8px;
+}
+.explain-pop p:last-child {
+  margin-bottom: 0;
+}
+.explain-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.explain-pop .explain-title {
+  margin: 4px 0 6px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.explain-x {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin: 0 -6px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+.explain-x svg {
+  width: 15px;
+  height: 15px;
+}
+.explain-x:hover {
+  background: var(--chip);
+  color: var(--text);
+}
+.explain-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.explain-pop .explain-how {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
 }
 .sel-pop {
   z-index: 50;

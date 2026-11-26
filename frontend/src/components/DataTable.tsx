@@ -5,6 +5,8 @@ import { useFrozenOrder } from "../useFrozenOrder";
 import { ArrowDown, ArrowUp, ArrowUpDown, X } from "lucide-react";
 import { Link } from "../router";
 import { Select } from "./Select";
+import { Explain } from "./Explain";
+import type { TermId } from "../glossary";
 import type { SortFilter } from "../useSortFilter";
 
 export interface Column<T> {
@@ -21,6 +23,10 @@ export interface Column<T> {
   label?: string;
   /** Render the cell content as the row's link (stretched over the whole row). */
   link?: boolean;
+  /** An ⓘ explaining the column, next to its header (beside the sort button, never inside it). Shown only while
+   *  the header row is: the stacked phone layouts hide it, so a term without another ⓘ on the page belongs on
+   *  the card's title instead. */
+  term?: TermId;
   cell: (row: T) => ReactNode;
 }
 
@@ -129,6 +135,7 @@ interface DataTableProps<T> {
 
 export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", className, rowClassName, rowHref, expanded, phoneSort, noFilter }: DataTableProps<T>) {
   const colCount = columns.length;
+  const headId = useId();
   // Re-sorting live rows must not drop focus from a row link (useFrozenOrder); the header sort
   // buttons are outside the body, so a sort the user asks for always applies.
   const { ordered, paused, onFocus, onBlur, onPointerDown } = useFrozenOrder(sf.view, rowKey);
@@ -145,18 +152,29 @@ export function DataTable<T>({ sf, columns, rowKey, label, variant = "plain", cl
               {columns.map((c) => {
                 const sortable = !!c.sortKey;
                 const cls = [c.className, c.align === "right" ? "r" : ""].filter(Boolean).join(" ");
+                // with an ⓘ, the header is named by its text alone: screen readers repeat it for every cell
+                const textId = c.term ? `${headId}-${c.key}` : undefined;
                 return (
-                  <th key={c.key} role="columnheader" scope="col" className={cls || undefined} aria-sort={sortable && !paused ? sf.ariaSort(c.sortKey as string) : undefined}>
+                  <th
+                    key={c.key}
+                    role="columnheader"
+                    scope="col"
+                    className={cls || undefined}
+                    aria-sort={sortable && !paused ? sf.ariaSort(c.sortKey as string) : undefined}
+                    aria-labelledby={textId}
+                  >
                     {sortable ? (
                       <button type="button" className="th-btn" onClick={() => sf.toggleSort(c.sortKey as string)}>
-                        <span className={c.hideHeader ? "sr-only" : undefined}>{c.header}</span>
+                        <span id={textId} className={c.hideHeader ? "sr-only" : undefined}>{c.header}</span>
                         <span className="arrow" aria-hidden="true">
                           {sf.ariaSort(c.sortKey as string) === "ascending" ? <ArrowUp /> : sf.ariaSort(c.sortKey as string) === "descending" ? <ArrowDown /> : <ArrowUpDown />}
                         </span>
                       </button>
                     ) : (
-                      <span className={c.hideHeader ? "sr-only" : undefined}>{c.header}</span>
+                      <span id={textId} className={c.hideHeader ? "sr-only" : undefined}>{c.header}</span>
                     )}
+                    {/* the header row is hidden in the stacked phone layouts: give such a table's terms an ⓘ outside it too */}
+                    {c.term && <Explain term={c.term} />}
                   </th>
                 );
               })}
