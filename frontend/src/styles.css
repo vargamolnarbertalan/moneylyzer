@@ -830,17 +830,21 @@ code {
   height: 100%;
   overflow: visible;
 }
+/* The chart's hover tooltip and compare badge use the popovers' glass (.glass: same blur, border, shadow
+   and solid fallbacks), with a more opaque fill: they sit right on the bright line and must stay legible. */
 .chart .tip {
   position: absolute;
   pointer-events: none;
-  background: var(--surface-solid);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 6px 9px;
+  background: color-mix(in srgb, var(--surface-solid) 86%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  padding: 6px 10px;
   font: 500 12px var(--num);
   white-space: nowrap;
   transform: translate(-50%, -115%);
-  box-shadow: var(--shadow);
+  box-shadow: var(--glass-shadow);
   z-index: 2;
 }
 .chart .grid-line {
@@ -907,12 +911,11 @@ code {
   max-width: calc(100% - 8px);
   padding: 6px 6px 7px 11px;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--surface-solid) 84%, transparent);
-  -webkit-backdrop-filter: blur(10px);
-  backdrop-filter: blur(10px);
-  box-shadow:
-    var(--shadow),
-    inset 0 0 0 1px var(--border);
+  background: color-mix(in srgb, var(--surface-solid) 86%, transparent);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6);
+  backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
   transform: translateX(-50%);
   cursor: pointer;
   animation: badge-in 0.22s var(--ease-out) backwards;
@@ -2601,34 +2604,6 @@ input[type="radio"],
   font-weight: 500;
   color: var(--muted);
 }
-/* Secondary explanations fold away (Overview chart method). */
-.note-more {
-  margin-top: 4px;
-}
-.note-more summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-  font-size: 12px;
-  color: var(--muted);
-  cursor: pointer;
-  list-style: none;
-  border-radius: 8px;
-}
-.note-more summary::-webkit-details-marker {
-  display: none;
-}
-.note-more summary:hover {
-  color: var(--text);
-}
-.note-more summary svg {
-  width: 14px;
-  height: 14px;
-}
-.note-more .note {
-  margin-top: 2px;
-}
 .advisor-ask .input {
   flex: 1 1 auto;
   min-width: 0;
@@ -3836,6 +3811,7 @@ a.news-card:hover {
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass,
   .cmp-badge,
+  .chart .tip,
   .tabbar {
     background: var(--surface-solid);
   }
@@ -3843,6 +3819,7 @@ a.news-card:hover {
 @media (prefers-reduced-transparency: reduce) {
   .glass,
   .cmp-badge,
+  .chart .tip,
   .tabbar {
     background: var(--surface-solid);
     -webkit-backdrop-filter: none;

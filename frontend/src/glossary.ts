@@ -38,7 +38,9 @@ export const GLOSSARY = {
       "Part of that can be new money you put in, not only price gains.",
     how:
       "At each point (a day, or an hour in the short ranges): what your holdings were worth then, at that moment's prices and exchange rates. " +
-      "A purchase makes the line step up, a sale makes it step down. A holding without recorded transactions counts with today's units throughout.",
+      "A purchase makes the line step up, a sale makes it step down. A holding without recorded transactions counts with today's units " +
+      "throughout. Minute and hour steps use prices as traded (not adjusted for dividends), fetched when you look; funds count at their " +
+      "latest daily price.",
   },
   unrealizedPL: {
     title: "Unrealized P/L",
@@ -146,11 +148,15 @@ export const GLOSSARY = {
     kind: "section",
     what: "What you hold today, replayed over the last 1 or 3 years: how bumpy it would have been and how deep the falls went.",
     example: "Even if you bought your shares last month, this shows how those same shares behaved over the past year.",
-    how: "Today's weights on each holding's stored daily prices, in your reporting currency. Past behaviour, not a forecast.",
+    how:
+      "Today's weights on each holding's stored daily prices, in your reporting currency, as if rebalanced to those weights every day, " +
+      "so your past purchases and sales don't change the picture. Past behaviour, not a forecast.",
   },
   volatility: {
     ...volatilityBase,
-    how: "From the daily moves over the chosen range, scaled to a year.",
+    how:
+      "From the daily moves over the chosen range, scaled to a year. Holdings on exchanges that close hours apart (Budapest, Frankfurt, " +
+      "New York) look a little less in step day by day than over a week, so for such a mix it reads somewhat low.",
   },
   maxDrawdown: {
     title: "Largest fall",
@@ -171,7 +177,9 @@ export const GLOSSARY = {
     example:
       "Beta 0,8: when world stocks rose or fell 1%, your mix moved about 0,8% on average. Beta 1,2: about 1,2%, bigger swings than the market. " +
       "With a low correlation, beta says little.",
-    how: "From weekly moves, in your reporting currency.",
+    how:
+      "From weekly moves, in your reporting currency: MSCI World is priced in Amsterdam, hours before New York closes, so daily moves " +
+      "would line up badly. Only the weeks with stored MSCI World prices count.",
   },
   effectiveHoldings: {
     title: "Effective holdings",
@@ -193,6 +201,7 @@ export const GLOSSARY = {
     what:
       "How much of your portfolio's ups and downs come from each holding. The shares add up to 100%. A holding that tends to move " +
       "against the others can show a negative share: it calms the whole down.",
+    how: "From daily moves, so with exchanges that close hours apart the US holdings' share reads somewhat low.",
     example: "A holding that is 20% of your money but swings a lot can cause half of the swings, while a calm holding at 50% causes far less.",
   },
 
