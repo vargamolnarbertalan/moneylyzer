@@ -1,6 +1,6 @@
 // Advisor conversation helpers: the quick prompts, the sessionStorage-backed conversation, the hand-over
 // from the Overview card, and the history the API wants.
-import type { AdvisorAnswer, AttachedFile, ChatTurn, DataLevel, Effort } from "./api";
+import type { AnswerMeta, AttachedFile, ChatTurn, DataLevel, Effort } from "./api";
 import { EFFORTS } from "./effort";
 import { readSession, removeSession, writeSession } from "./storage";
 
@@ -11,7 +11,7 @@ export interface ChatMessage {
   /** Only on questions: the files attached to it (names and sizes; the files themselves are not kept). */
   files?: AttachedFile[];
   /** Only on answers. */
-  meta?: Pick<AdvisorAnswer, "provider" | "model" | "effort" | "sources" | "shared">;
+  meta?: AnswerMeta;
 }
 
 export interface Chat {

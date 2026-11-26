@@ -113,7 +113,8 @@ class PersonaTests(unittest.TestCase):
         for section in sections:
             self.assertIn(section, settings_line, f"Settings section {section!r} missing from the app guide")
         text = persona.compose_system_prompt("Short persona.", {}, "relative", False)
-        self.assertIn("you cannot change anything in the app", text)  # fixed: an edited persona keeps it
+        self.assertIn("You cannot change anything in the app yourself", text)  # fixed: an edited persona keeps it
+        self.assertIn("# Proposing changes", text)
         self.assertLess(text.index("Non-negotiable guardrails"), text.index("# The app you work in"))
 
     def test_default_persona_checks_platform_terms_live(self):

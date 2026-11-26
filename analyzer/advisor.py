@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
-from analyzer import attachments, db, research, secrets_store
+from analyzer import attachments, db, proposals, research, secrets_store
 from analyzer.engine import analyze_history
 from analyzer.llm import Provider, applied_effort, complete, takes_effort, validate
 from analyzer.persona import DEFAULT_PERSONA, compose_system_prompt, normalize_preferences, normalize_rules
@@ -174,6 +174,16 @@ def get_settings() -> dict:
     rules = normalize_rules(json.loads(rows.get("rules") or "[]"))
     return {"persona": persona, "is_default_persona": persona.strip() == DEFAULT_PERSONA.strip(),
             "default_persona": DEFAULT_PERSONA, "preferences": prefs, "rules": rules}
+
+
+def proposal_state(settings: dict | None = None) -> dict:
+    """What change cards are checked against: the settings they may change, as they are now."""
+    settings = settings or get_settings()
+    return {"rules": settings["rules"], "preferences": settings["preferences"], "base_currency": db.base_currency()}
+
+
+class ProposalDone(ValueError):
+    """The card was already applied: a later Dismiss or Adjust (another tab) must not hide that."""
 
 
 class LevelChanged(Exception):
@@ -346,7 +356,13 @@ def ask(provider_id: str | None, question: str, history: list[dict], snapshot: d
     stamp = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d %H:%M")
     user_msg = f"Current date and time (UTC): {stamp}.\n{render_context(ctx)}\n\n<question>{focus}\n{question}\n</question>"
     result = complete(provider, system, [*turns, {"role": "user", "content": user_msg}], attachments=parts)
-    answer = {**result, "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind},
+    # Change cards the model proposed: out of the text, checked, before -> after from the current settings.
+    raw = result["text"]
+    text, cards, notes = proposals.parse(raw, proposal_state(settings))
+    # a link that stood only inside a removed block was never shown in the answer: it is no source either
+    sources = [s for s in result.get("sources") or [] if s.get("url", "") in text or s.get("url", "") not in raw]
+    answer = {**result, "text": text, "sources": sources, "proposals": cards, "proposal_notes": notes,
+              "provider": {"id": provider.id, "name": provider.name, "kind": provider.kind},
               "effort": applied_effort(provider), "shared": shared}
     if conversation_id:
         try:
@@ -393,7 +409,7 @@ def save_turn(conversation_id: str, provider_id: str, question: str, answer: dic
     if not CONVERSATION_ID_RE.fullmatch(conversation_id or "") or (turn_id and not CONVERSATION_ID_RE.fullmatch(turn_id)):
         raise ValueError("Bad conversation id.")
     stamp = _stamp(now)
-    meta = {k: answer.get(k) for k in ("provider", "model", "effort", "sources", "shared")}
+    meta = {k: answer.get(k) for k in ("provider", "model", "effort", "sources", "shared", "proposals", "proposal_notes")}
     reply = {"id": uuid.uuid4().hex[:12], "role": "assistant", "content": answer.get("text", ""), "meta": meta}
     with db.connect() as conn:
         _connect_for_deletes(conn)
@@ -423,6 +439,26 @@ def save_turn(conversation_id: str, provider_id: str, question: str, answer: dic
             "model = excluded.model, updated_at = excluded.updated_at, messages = excluded.messages",
             (conversation_id, " ".join(question.split())[:80], provider_id, answer.get("model"), stamp, stamp, payload))
         _purge(conn, now)  # the cap counts this one too
+
+
+def set_proposal_status(conversation_id: str, proposal_id: str, status: str) -> None:
+    """Record what became of a change card (applied, dismissed, adjusted) in its saved answer. KeyError when
+    the conversation or the card isn't there (never saved, expired, deleted)."""
+    if status not in proposals.STATUSES:
+        raise ValueError("Unknown status.")
+    with db.connect() as conn:
+        _connect_for_deletes(conn)  # the rewritten row's old copy is zeroed, as for every write to this table
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT messages FROM ai_conversations WHERE id = ?", (conversation_id,)).fetchone()
+        messages = json.loads(row["messages"]) if row else []
+        card = next((p for m in messages if m.get("role") == "assistant"
+                     for p in ((m.get("meta") or {}).get("proposals") or []) if p.get("id") == proposal_id), None)
+        if card is None:
+            raise KeyError("No such suggestion in this conversation.")
+        if card.get("status") == "applied" and status != "applied":
+            raise ProposalDone("This change was already applied.")
+        card["status"] = status
+        conn.execute("UPDATE ai_conversations SET messages = ? WHERE id = ?", (json.dumps(messages), conversation_id))
 
 
 def list_conversations(now: datetime | None = None) -> list[dict]:
