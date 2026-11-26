@@ -5,14 +5,18 @@ and is explained in the row's `check`; totals only sum what is known and report 
 """
 from __future__ import annotations
 
+import logging
+from datetime import date
 from typing import Any
 
 import pandas as pd
 
 from analyzer import db
-from analyzer.engine import currency_mismatch, latest_price_currency, summarize_position
+from analyzer.engine import cash_flows, currency_mismatch, latest_price_currency, summarize_position
 from analyzer.market import fund_isin
+from analyzer.returns import money_weighted
 
+log = logging.getLogger("lia")
 FX_MAX_AGE_DAYS = 7  # a buy-date FX rate may come from the nearest earlier trading day, at most this far back
 SPARK_POINTS = 30
 
@@ -64,6 +68,11 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
     instruments = db.get_instruments()
     lots = db.get_lots()
     rows = []
+    as_of_day = _today().date()
+    # money-weighted return: every holding with transactions whose amounts are all known, closed ones included
+    # (a sale's result is part of how the money did); holdings without transactions have no dates to measure
+    all_flows: list[tuple[date, float]] = []
+    measured = left_out = 0
     for item in instruments.to_dict("records"):
         currency = str(item["currency"]).strip().upper()
         item_lots = lots[lots["instrument_id"] == item["instrument_id"]].to_dict("records")
@@ -96,6 +105,15 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
         if source == "live" and price is not None:
             closes = (closes + [price])[-SPARK_POINTS:]
         check = "; ".join([c for c in [pos["check"], *notes] if c])
+        flows = cash_flows(item, item_lots, pos["value_base"], pos["closed"], as_of_day.isoformat(), book.rate, base)
+        mwr = None
+        if flows is not None:
+            dated = [(date.fromisoformat(d), cf) for d, cf in flows]
+            mwr = _safe_mwr(dated, as_of_day)
+            all_flows += dated
+            measured += 1
+        elif item_lots:
+            left_out += 1
         rows.append({
             "id": item["instrument_id"], "name": item["name"], "type": item["asset_type"], "currency": currency,
             "symbol": symbol or None, "price": price, "price_currency": price_currency, "price_source": source,
@@ -104,6 +122,7 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
             "pnl": pos["pnl"], "pnl_base": pos["pnl_base"], "pnl_pct": pos["pnl_pct"],
             "today_base": today_base, "today_pct": today_pct, "lots": len(item_lots), "sells": pos["sells"],
             "realized_base": pos["realized_base"], "closed": pos["closed"], "spark": closes, "check": check,
+            "mwr": mwr,
         })
 
     # A closed holding (everything sold) is worth 0 and is no part of the allocation or the counts below;
@@ -133,9 +152,23 @@ def build_snapshot(quotes: dict[str, dict], fx_now: dict[str, float], base: str 
                               else sum(r["realized_base"] for r in rows)),
             "holdings": len(held), "closed": len(rows) - len(held), "valued": len(valued),
             "with_pnl": len(with_pnl), "with_today": len(with_today),
+            # money-weighted return over every measured holding; left out: holdings with transactions but an
+            # unknown amount (holdings without transactions are not counted either way)
+            "mwr": _safe_mwr(all_flows, as_of_day) if all_flows else None,
+            "mwr_holdings": measured, "mwr_left_out": left_out,
         },
         "fx": fx_now,
     }
+
+
+def _safe_mwr(flows: list[tuple[date, float]], today: date) -> dict | None:
+    """The return, or None if it cannot be computed: a figure that fails (odd dates, overflow) must never
+    take the whole snapshot (every value on every page) down with it."""
+    try:
+        return money_weighted(flows, today)
+    except (ArithmeticError, ValueError):
+        log.warning("money-weighted return could not be computed", exc_info=True)
+        return None
 
 
 def _today() -> pd.Timestamp:
