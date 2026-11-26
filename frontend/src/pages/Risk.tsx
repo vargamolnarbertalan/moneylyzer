@@ -1,7 +1,6 @@
 // Risk: concentration and exposure from today's weights, and how today's mix would have moved over the past
 // year or three (GET /api/risk). Stored prices only: nothing is fetched for this page, and nothing is a forecast.
 import { useMemo } from "react";
-import { Info } from "lucide-react";
 import { endpoints, type RiskHistory, type RiskHolding, type RiskReport } from "../api";
 import { Alert } from "../components/Alert";
 import { AreaChart } from "../components/AreaChart";
@@ -235,26 +234,6 @@ function History({ data, range, setRange, loading }: { data: RiskReport; range: 
             <LeftOut excluded={h.excluded ?? []} />
           </>
         )}
-        <details className="note-more">
-          <summary>
-            <Info aria-hidden="true" />
-            How it's calculated
-          </summary>
-          <p className="note">
-            Today's weights replayed on each holding's stored daily closes, converted at each day's rate (as if rebalanced to those weights
-            every day), so your past buys and sales don't distort it. Volatility: the standard deviation of daily moves, scaled to a year by
-            the number of days with prices in a year. Largest fall: the deepest drop from a previous high. Beta: how much the mix moved per 1%
-            move of MSCI World (1 = in step, 0.5 = half as much); the correlation shows how closely (1 = always together, 0 = unrelated). Both
-            use weekly moves, because MSCI World is priced in Amsterdam hours before US markets close, and cover only the weeks with stored
-            MSCI World prices. Share of risk: each holding's part of the mix's swings (they add up to 100%); a small holding can carry a large
-            share if it moves a lot.
-          </p>
-          <p className="note">
-            Volatility, worst day and share of risk use daily moves. Holdings on exchanges that close hours apart (Budapest, Frankfurt, New
-            York) seem to move together a little less day by day than they do over a week, so for such a mix these read somewhat low, and
-            the US holdings' share of risk most of all.
-          </p>
-        </details>
       </Card>
       {!h.error && <PerHolding rows={h.holdings} covered={h.covered_weight} />}
     </>

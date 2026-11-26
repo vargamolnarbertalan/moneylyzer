@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChartBar, ChartPie, Info, LayoutGrid } from "lucide-react";
+import { ChartBar, ChartPie, LayoutGrid } from "lucide-react";
 import { endpoints, type HistoryRange, type IntradayHistory, type Row, type Snapshot } from "../api";
 import { INTERVALS, defaultInterval, intervalOptions, intervalsFor, isYahooSymbol, useIntraday, type Interval } from "../intraday";
 import { AdvisorCard } from "../components/AdvisorCard";
@@ -320,16 +320,6 @@ function ValueChart({ snap }: { snap: Snapshot }) {
           {dailyOnly.length > 0 && ` At their latest daily price: ${dailyOnly.join(", ")} (Yahoo had no ${what} prices).`}
         </p>
       )}
-      <details className="note-more">
-        <summary>
-          <Info aria-hidden="true" />
-          How it's calculated
-        </summary>
-        <p className="note">
-          Rebuilt from stored daily prices × the units you held (your buys and sells), converted at each day's rate; holdings without transactions use today's quantity.
-          {" "}With a minute or hour interval: Yahoo's prices at each moment one of your holdings traded (as traded, not adjusted for dividends) and the exchange rate at that moment; funds and other holdings without such prices count at their latest daily price. Fetched when you look, not stored.
-        </p>
-      </details>
     </Card>
   );
 }
