@@ -62,9 +62,10 @@ const HoldingsPage = page(() => import("./pages/Holdings").then((m) => m.Holding
 const ImportPage = page(() => import("./pages/Import").then((m) => m.ImportPage));
 const MarketsPage = page(() => import("./pages/Markets").then((m) => m.MarketsPage));
 const PrivacyPage = page(() => import("./pages/Privacy").then((m) => m.PrivacyPage));
+const RiskPage = page(() => import("./pages/Risk").then((m) => m.RiskPage));
 const SettingsPage = page(() => import("./pages/Settings").then((m) => m.SettingsPage));
 /** In the order they are preloaded: the likeliest next click from the Overview first. */
-const LAZY_PAGES = [HoldingPage, HoldingsPage, AdvisorPage, MarketsPage, SettingsPage, PrivacyPage, ImportPage];
+const LAZY_PAGES = [HoldingPage, HoldingsPage, AdvisorPage, MarketsPage, RiskPage, SettingsPage, PrivacyPage, ImportPage];
 
 /** A page whose code could not be loaded (offline, or the server was updated and the old
  *  files are gone) gets a reload button instead of taking the whole app down. Keyed by path
@@ -121,6 +122,7 @@ function route(path: string): Routed {
   if (path === "/analyst") return { title: "AI analyst", element: <AdvisorPage /> };
   if (path === "/holdings") return { title: "Holdings", element: <HoldingsPage /> };
   if (path === "/markets") return { title: "Markets", element: <MarketsPage /> };
+  if (path === "/risk") return { title: "Risk", element: <RiskPage /> };
   if (path === "/privacy") return { title: "Data & privacy", element: <PrivacyPage /> };
   if (path === "/import") return { title: "Import", element: <ImportPage /> };
   if (path === "/settings") return { title: "Settings", element: <SettingsPage /> };

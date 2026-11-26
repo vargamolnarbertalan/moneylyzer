@@ -12,6 +12,9 @@ interface AreaChartProps {
   /** Signed format for the difference between two picked points; `from` is the earlier value
    *  (for precision). Defaults to a sign + fmtTip. */
   fmtDelta?: (v: number, from: number) => string;
+  /** Also show the relative % change between two picked points (off for values that are themselves
+   *  percentages, such as a drawdown, where "−5% to −10%" as "−100%" would mislead). */
+  relative?: boolean;
   /** What the data is (range, currency, which response). A change drops the picked comparison
    *  and replays the draw-in, even when the new data looks the same. Live ticks keep the key. */
   resetKey?: string;
@@ -81,7 +84,7 @@ function pctText(frac: number, amountTone: "up" | "down" | ""): { text: string; 
  *  Picking two points (click/tap, Enter, or the screen-reader point controls) compares them: the
  *  series outside the interval fades and a badge over the interval shows the change in units and
  *  percent. The next pick clears it. */
-export function AreaChart({ values, labels, fmt, fmtTip, fmtDelta, resetKey, busy = false, refValue = null, tone = "trend", live = false, label }: AreaChartProps) {
+export function AreaChart({ values, labels, fmt, fmtTip, fmtDelta, relative = true, resetKey, busy = false, refValue = null, tone = "trend", live = false, label }: AreaChartProps) {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const badgeRef = useRef<HTMLDivElement | null>(null);
   const { w: W, h: H } = useSize(wrapRef);
@@ -198,7 +201,7 @@ export function AreaChart({ values, labels, fmt, fmtTip, fmtDelta, resetKey, bus
     const vTo = values[to] as number;
     const text = deltaFmt(vTo - vFrom, vFrom);
     const t = toneOf(text);
-    const f = change(vFrom, vTo);
+    const f = relative ? change(vFrom, vTo) : null;
     return { from, to, text, tone: t, pct: f === null ? null : pctText(f, t) };
   };
   const describe = (c: ReturnType<typeof compare>) => `${at(c.from)} to ${at(c.to)}: ${c.text}${c.pct ? `, ${c.pct.text}` : ""}.`;
@@ -450,7 +453,7 @@ export function AreaChart({ values, labels, fmt, fmtTip, fmtDelta, resetKey, bus
             <div className="cmp-badge-row">
               <span className="sr-only">Change, </span>
               <strong className={`cmp-diff ${result.tone}`}>{result.text}</strong>
-              {result.pct ? <span className={`pill ${result.pct.tone || "none"}`}>{result.pct.text}</span> : <span className="cmp-range">no % from zero</span>}
+              {result.pct ? <span className={`pill ${result.pct.tone || "none"}`}>{result.pct.text}</span> : relative && <span className="cmp-range">no % from zero</span>}
               <button
                 type="button"
                 className="cmp-x"

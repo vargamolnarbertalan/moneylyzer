@@ -278,7 +278,10 @@ def delete_instrument(instrument_id: str) -> None:
         conn.execute("DELETE FROM instruments WHERE instrument_id = ?", (instrument_id,))
 
 
-def save_prices(instrument_id: str, prices: pd.DataFrame, source: str) -> int:
+def save_prices(instrument_id: str, prices: pd.DataFrame, source: str, replace_except: str | None = None) -> int:
+    """Upsert daily closes. With replace_except, the rows between the first and last date given are replaced
+    as a whole (same transaction), except those whose source is replace_except: a full download is then the
+    truth for its range, and no close from another listing or an older adjustment survives inside it."""
     if prices.empty:
         return 0
     records = []
@@ -292,6 +295,9 @@ def save_prices(instrument_id: str, prices: pd.DataFrame, source: str) -> int:
             currency = None
         records.append((instrument_id, dt, close, currency, source))
     with connect() as conn:
+        if replace_except is not None and records:
+            conn.execute("DELETE FROM prices WHERE instrument_id = ? AND date BETWEEN ? AND ? AND source IS NOT ?",
+                         (instrument_id, min(r[1] for r in records), max(r[1] for r in records), replace_except))
         conn.executemany(
             """
             INSERT INTO prices(instrument_id, date, close, currency, source)

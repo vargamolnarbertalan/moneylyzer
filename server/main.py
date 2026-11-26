@@ -25,6 +25,7 @@ from analyzer import advisor, attachments, db, llm, prefs, research
 from analyzer.persona import MAX_RULE_CHARS, MAX_RULES
 from analyzer.engine import MINOR_UNITS, analyze_history, bootstrap_scenarios, latest_price_currency, realized_by_sale
 from analyzer.portfolio import RateBook, intraday_value_history, value_history
+from analyzer.risk import risk_report
 from analyzer.market import CURRENCY_RE, download_fund_nav, download_intraday, fund_isin, fx_symbol, live_quote, search_instruments
 from analyzer.portfolio import is_yahoo_symbol
 from analyzer.validation import ASSET_TYPE_CODES, LOTS_HEADER, validate_holdings, validate_lots
@@ -313,6 +314,14 @@ async def portfolio_history(range: Literal["1W", "1M", "3M", "6M", "1Y", "3Y", "
     if result.get("error"):
         raise HTTPException(502 if "Yahoo returned" in result["error"] else 400, result["error"])
     return jsonable({"range": range, "interval": interval, **result})
+
+
+@app.get("/api/risk")
+async def risk(range: Literal["1Y", "3Y"] = "1Y", user: str = Depends(auth.require_user)):
+    """Concentration, exposure and the history of today's mix, from stored data (on a cold start only the
+    portfolio snapshot is built first, which may fetch quotes, as for /api/portfolio)."""
+    snapshot = hub.snapshot or await hub.refresh()
+    return jsonable({"range": range, **await asyncio.to_thread(risk_report, snapshot, RANGE_DAYS[range])})
 
 
 @app.get("/api/stream")

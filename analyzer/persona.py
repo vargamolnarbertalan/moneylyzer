@@ -124,23 +124,29 @@ APP_GUIDE = """# The app you work in (Moneylyzer; fixed, so it matches the app)
 Moneylyzer is a self-hosted portfolio tracker: its database stays on the user's own server, and what
 leaves it (price and news requests, and questions to AI models like you) is listed on Data & privacy.
 When you point to a place in the app, use these names.
-- Overview: total value, profit and loss, value over time, allocation and the holdings table; the
-  reporting currency can be switched in the page header. A refresh button in the header fetches
-  prices now.
+- Overview: total value, profit and loss with the money-weighted Return (XIRR: annual once the money
+  has been invested a year on average, otherwise the period's return, not annualised), value over time
+  (daily, or minute/hour steps for up to a year), allocation and the holdings table; the reporting
+  currency can be switched in the page header. A refresh button in the header fetches prices now.
 - Holdings: every holding; "Add holding" opens a wizard (find the instrument, then the first purchase
   with its date, units, price and platform). Holdings can be edited or deleted here.
-- Holding: a holding's own page, opened from any list: price chart, indicators, scenario ranges and its
-  transactions (buys and sells), where transactions are added or deleted.
+- Holding: a holding's own page, opened from any list: price chart (with an interval picker), its
+  Return, indicators, scenario ranges and its transactions (buys and sells), where transactions are
+  added or deleted.
 - Import: CSV import of holdings, transactions (buys and sells) and prices, with templates.
-- AI analyst: this conversation, with quick questions.
+- AI analyst: this conversation, with quick questions; files can be attached to a question.
 - Markets: benchmarks, rates, currencies, commodities and news.
+- Risk: concentration (largest holding, top 3, effective number of holdings), currency and asset-type
+  exposure, and how today's mix would have moved over 1 or 3 years (volatility, largest fall, worst
+  day and month, beta and correlation vs MSCI World, each holding's share of the risk). Only holdings with
+  prices across the whole range count; the page names the others and why.
 - Data & privacy: what leaves the server, and for each AI model whether it gets relative figures or
   full detail.
-- Settings: Appearance (theme, animations); Display (reporting currency); Your data (database backup,
+- Settings: Appearance (theme, animations); Display (reporting currency, how often live prices refresh); Your data (database backup,
   log out); AI models (connect Claude or other providers, web research); AI analyst rules (the
   standing rules); AI analyst persona (this ruleset and the investing preferences: horizon, risk,
   answer language, country, notes, short-term trading, direct recommendations); About (version and the not-financial-advice
-  notice); More (links to Data & privacy and Import); Change password.
+  notice); More (links to Data & privacy, Import and Risk: the way to them on a phone); Change password.
 - Unit prices and average costs are as quoted by the market; a holding's price_divisor turns a quote
   into its currency's main unit (100 for prices in pence or cents, or for bonds quoted per 100
   nominal). A holding's "check" note flags data problems, such as a price in another currency.
@@ -157,7 +163,8 @@ When you point to a place in the app, use these names.
 SETTINGS_SECTIONS = ("Appearance", "Display", "Your data", "About", "AI models", "AI analyst rules",
                      "AI analyst persona", "More", "Change password")
 APP_PAGES = {"/": "Overview", "/holdings": "Holdings", "/holding/:id": "Holding", "/import": "Import",
-             "/analyst": "AI analyst", "/markets": "Markets", "/privacy": "Data & privacy", "/settings": "Settings"}
+             "/analyst": "AI analyst", "/markets": "Markets", "/risk": "Risk", "/privacy": "Data & privacy",
+             "/settings": "Settings"}
 
 SHORT_TERM_OFF = (
     "- Short-term trading is NOT enabled: decline to help plan day trades, intraday timing, trades timed "
